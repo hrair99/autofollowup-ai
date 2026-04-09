@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { createClient } from "A/lib/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 import { Zap, Loader2 } from "lucide-react";
 
 export default function LoginPage() {

@@ -55,7 +55,7 @@ export default async function LeadsPage() {
                 <tr key={lead.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div>
-                      <p className="text-sm font-medium text-gray-900">{`ead.name}</p>
+                      <p className="text-sm font-medium text-gray-900">{lead.name}</p>
                       <p className="text-sm text-gray-500 flex items-center gap-1">
                         <Mail className="h-3 w-3" />
                         {lead.email}
@@ -66,10 +66,10 @@ export default async function LeadsPage() {
                     {lead.company ? (
                       <span className="text-sm text-gray-700 flex items-center gap-1">
                         <Building2 className="h-3.5 w-3.5 text-gray-400" />
-                        {,ead.company}
+                        {lead.company}
                       </span>
                     ) : (
-                      <span className="text-sm text-gray-400">â€“O</span>
+                      <span className="text-sm text-gray-400">â€”</span>
                     )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
@@ -103,6 +103,4 @@ export default async function LeadsPage() {
           </p>
         </div>
       )}
-    </div>
-  +p;
-}
+    </div>(€€<­(

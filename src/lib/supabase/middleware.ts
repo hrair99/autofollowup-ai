@@ -5,8 +5,8 @@ export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request: { headers: request.headers } });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         get(name: string) {
@@ -24,8 +24,7 @@ export async function updateSession(request: NextRequest) {
         },
       },
     }
-  
-  I;
+  );
 
   const { data: { user } } = await supabase.auth.getUser();
 

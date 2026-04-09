@@ -9,7 +9,7 @@ const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN!;
 // Service role client to bypass RLS (webhook has no user session)
 function getServiceClient() {
   return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 }
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   const token = searchParams.get("hub.verify_token");
   const challenge = searchParams.get("hub.challenge");
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && token === VERIE_TOKEN) {
     console.log("Webhook verified successfully");
     return new NextResponse(challenge);
   }
@@ -37,7 +37,6 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-
     if (body.object !== "page") {
       return NextResponse.json({ status: "ignored" });
     }

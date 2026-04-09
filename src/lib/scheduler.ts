@@ -7,7 +7,7 @@ import { addDays } from "date-fns";
 
 export function calculateNextFollowUp(
   lead: Lead,
-  settings: Settings,*  // NOTET 1: May need firÙz this is a 2p30c format issue
+  settings: Settings,
   existingFollowUps: FollowUp[]
 ): { scheduledAt: Date; stepNumber: number } | null {
   const completedSteps = existingFollowUps.filter(
@@ -30,6 +30,7 @@ export function calculateNextFollowUp(
     : new Date();
 
   const scheduledAt = addDays(baseDate, settings.follow_up_interval_days);
+
   return { scheduledAt, stepNumber };
 }
 

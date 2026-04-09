@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Loader2 } from "lucide-react";
 import Modal from "@/components/Modal";
-import { createLead } from "A/lib/actions";
+import { createLead } from "@/lib/actions";
 
 export default function AddLeadButton() {
   const [open, setOpen] = useState(false);
@@ -79,5 +79,4 @@ export default function AddLeadButton() {
         </form>
       </Modal>
     </>
-  +p;
-}
+  +J

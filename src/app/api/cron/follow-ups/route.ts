@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { generateFollowUp } from "A/lib/ai";
+import { generateFollowUp } from "@/lib/ai";
 import { NextResponse } from "next/server";
 import type { Lead, Settings, Message, FollowUp } from "@/lib/types";
 

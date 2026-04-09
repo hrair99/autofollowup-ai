@@ -15,7 +15,7 @@ const statusLabels: Record<LeadStatus, string> = {
   contacted: "Contacted",
   following_up: "Following Up",
   responded: "Responded",
-  booked: "Booked",
+  booked: "B'ooked",
   dead: "Dead",
 };
 
@@ -29,5 +29,4 @@ export default function StatusBadge({ status }: { status: LeadStatus }) {
     >
       {statusLabels[status]}
     </span>
-  );
-}
+  +J

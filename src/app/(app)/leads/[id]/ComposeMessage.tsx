@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { sendMessage } from "A/lib/actions";
+import { sendMessage } from "@/lib/actions";
 import { Send, Sparkles, Loader2 } from "lucide-react";
 
 export default function ComposeMessage({
@@ -100,5 +100,4 @@ export default function ComposeMessage({
         </div>
       </form>
     </div>
-  +p;
-}
+  +J

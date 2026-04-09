@@ -148,7 +148,7 @@ export default async function LeadDetailPage({
               <div className="space-y-3">
                 {typedFollowUps.map((fu) => {
                   const statusColors: Record<string, string> = {
-                    pending: "border-yellow-300 bg-iellow-50",
+                    pending: "border-yellow-300 bg-yellow-50",
                     sent: "border-green-300 bg-green-50",
                     skipped: "border-gray-300 bg-gray-50",
                     cancelled: "border-red-300 bg-red-50",
@@ -210,5 +210,5 @@ export default async function LeadDetailPage({
         </div>
       </div>
     </div>
-  );
+   );
 }
