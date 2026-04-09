@@ -210,5 +210,5 @@ export default async function LeadDetailPage({
         </div>
       </div>
     </div>
-   );
+  );
 }
