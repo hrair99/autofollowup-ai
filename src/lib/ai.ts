@@ -4,7 +4,7 @@ import type { Lead, Settings, Message } from "./types";
 // Mock AI layer — swap for OpenAI in production
 // ============================================
 
-const TEMPLATESN�Record<string, string[]> = {
+const TEMPLATES: Record<string, string[]> = {
   professional: [
     "Hi {name},\n\nI wanted to follow up on my previous message regarding {company}. I believe we could provide significant value to your team.\n\nWould you have 15 minutes this week for a quick call?\n\nBest regards,\n{signature}",
     "Hello {name},\n\nI hope this message finds you well. I'm reaching out again because I think {business} could be a great fit for {company}.\n\nI'd love to schedule a brief conversation at your convenience.\n\nBest,\n{signature}",
@@ -42,13 +42,13 @@ export async function generateFollowUp(
   await new Promise((resolve) => setTimeout(resolve, 300));
 
   const tone = settings.ai_tone || "professional";
-  const templates = TEMPLATQ[tone] || TEMPLATES.professional;
+  const templates = TEMPLATES[tone] || TEMPLATES.professional;
   const template = templates[(stepNumber - 1) % templates.length];
   const body = fillTemplate(template, lead, settings);
 
   const subjects = [
     `Following up — ${settings.business_name || "Quick question"}`,
-    `Re: ${lead.company || lead.name} ‖ next steps?`,
+    `Re: ${lead.company || lead.name} — next steps?`,
     `Checking in, ${lead.name.split(" ")[0]}`,
     `Don't want you to miss this, ${lead.name.split(" ")[0]}`,
     `Last follow-up — ${settings.business_name || ""}`,
