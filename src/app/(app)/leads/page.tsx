@@ -103,4 +103,6 @@ export default async function LeadsPage() {
           </p>
         </div>
       )}
-    </div>(€€<­(
+    </div>
+  );
+}
