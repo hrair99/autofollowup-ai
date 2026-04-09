@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { updateLeadStatus, deleteLead, scheduleFollowUps } from "A/lib/actions";
+import { updateLeadStatus, deleteLead, scheduleFollowUps } from "@/lib/actions";
 import type { Lead, LeadStatus } from "@/lib/types";
 import {
   Play,
