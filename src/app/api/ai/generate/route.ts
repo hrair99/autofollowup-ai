@@ -1,5 +1,5 @@
 import { createServerSupabase } from "@/lib/supabase/server";
-import { generateFollowUp, generateInitialOutreach } from "A/lib/ai";
+import { generateFollowUp, generateInitialOutreach } from "@/lib/ai";
 import { NextResponse } from "next/server";
 import type { Lead, Settings, Message } from "@/lib/types";
 
