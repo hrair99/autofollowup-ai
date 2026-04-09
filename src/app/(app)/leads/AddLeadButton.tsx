@@ -79,4 +79,5 @@ export default function AddLeadButton() {
         </form>
       </Modal>
     </>
-  +J
+  );
+}
