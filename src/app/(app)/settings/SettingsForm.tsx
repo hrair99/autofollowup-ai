@@ -167,4 +167,5 @@ export default function SettingsForm({ settings }: { settings: Settings | null }
         )}
       </div>
     </form>
-  +J
+  );
+}
