@@ -100,4 +100,5 @@ export default function ComposeMessage({
         </div>
       </form>
     </div>
-  +J
+  );
+}
