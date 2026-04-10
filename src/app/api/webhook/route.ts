@@ -15,7 +15,7 @@ function getServiceClient() {
 }
 
 // ============================================
-// GET — Meta webhook verification
+// GET â Meta webhook verification
 // ============================================
 export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
 }
 
 // ============================================
-// POST — Incoming messages from Messenger
+// POST â Incoming messages from Messenger
 // ============================================
 export async function POST(req: NextRequest) {
   try {
@@ -47,6 +47,9 @@ export async function POST(req: NextRequest) {
     for (const entry of body.entry) {
       if (!entry.messaging) continue;
 
+      // The page that received the message â used to look up the correct token
+      const pageId = entry.id;
+
       for (const event of entry.messaging) {
         if (!event.message || !event.message.text) continue;
 
@@ -54,7 +57,7 @@ export async function POST(req: NextRequest) {
         const messageText = event.message.text;
         const timestamp = event.timestamp;
 
-        console.log(`Incoming message from ${senderId}: ${messageText}`);
+        console.log(`Incoming message on page ${pageId} from ${senderId}: ${messageText}`);
 
         // ----------------------------------------
         // 1. Find or create the lead
@@ -67,7 +70,7 @@ export async function POST(req: NextRequest) {
 
         if (!lead) {
           // Fetch profile from Meta
-          const profile = await getUserProfile(senderId);
+          const profile = await getUserProfile(senderId, pageId);
           const name = profile
             ? `${profile.first_name} ${profile.last_name}`
             : `Messenger User ${senderId.slice(-4)}`;
@@ -157,7 +160,7 @@ export async function POST(req: NextRequest) {
         };
 
         // Show typing indicator
-        await sendTypingIndicator(senderId);
+        await sendTypingIndicator(senderId, "typing_on", pageId);
 
         // Fetch recent conversation history for context
         const { data: recentMessages } = await supabase
@@ -176,7 +179,7 @@ export async function POST(req: NextRequest) {
         );
 
         // Send the reply via Messenger
-        await sendMessage(senderId, replyBody);
+        await sendMessage(senderId, replyBody, pageId);
 
         // Save the outbound message
         await supabase.from("messages").insert({
