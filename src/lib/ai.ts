@@ -1,60 +1,150 @@
 import type { Lead, Settings, Message } from "./types";
 
 // ============================================
-// Mock AI layer — swap for OpenAI in production
+// Anthropic Claude AI layer for smart replies
 // ============================================
 
-const TEMPLATES: Record<string, string[]> = {
-  professional: [
-    "Hi {name},\n\nI wanted to follow up on my previous message regarding {company}. I believe we could provide significant value to your team.\n\nWould you have 15 minutes this week for a quick call?\n\nBest regards,\n{signature}",
-    "Hello {name},\n\nI hope this message finds you well. I'm reaching out again because I think {business} could be a great fit for {company}.\n\nI'd love to schedule a brief conversation at your convenience.\n\nBest,\n{signature}",
-    "Dear {name},\n\nJust circling back on my earlier note. I understand you're busy, but I wanted to make sure this didn't slip through the cracks.\n\nWould any time this week work for a 10-minute chat?\n\nRegards,\n{signature}",
-  ],
-  friendly: [
-    "Hey {name}! 👋\n\nJust bumping this to the top of your inbox. I'd love to chat about how {business} can help {company} grow.\n\nGot a few minutes this week?\n\n{signature}",
-    "Hi {name}!\n\nHoping to connect with you — I think there's a real opportunity for us to work together.\n\nLet me know if you'd like to hop on a quick call!\n\nCheers,\n{signature}",
-  ],
-  casual: [
-    "Hey {name},\n\nQuick follow-up! Would love to chat when you get a chance.\n\n{signature}",
-    "Hi {name} — just checking in! Let me know if you'd like to connect.\n\n{signature}",
-  ],
-  urgent: [
-    "Hi {name},\n\nI wanted to reach out one more time before I close out your file. We have limited availability this month and I'd hate for {company} to miss out.\n\nCan we connect today or tomorrow?\n\n{signature}",
-    "{name},\n\nFinal follow-up — I have a slot open this week that I'm holding for {company}. Let me know if you'd like to grab it.\n\n{signature}",
-  ],
-};
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-function fillTemplate(template: string, lead: Lead, settings: Settings): string {
-  return template
-    .replace(/{name}/g, lead.name.split(" ")[0])
-    .replace(/{company}/g, lead.company || "your company")
-    .replace(/{business}/g, settings.business_name || "our team")
-    .replace(/{signature}/g, settings.signature || settings.business_name || "The Team");
+/**
+ * Generate a contextual reply to an incoming Messenger message using Claude.
+ * Falls back to a simple acknowledgment if no API key is configured.
+ */
+export async function generateMessengerReply(
+  lead: Lead,
+  settings: Settings,
+  incomingMessage: string,
+  conversationHistory: Message[] = []
+): Promise<string> {
+  // If no API key, use a simple fallback
+  if (!ANTHROPIC_API_KEY) {
+    console.warn("No ANTHROPIC_API_KEY set — using fallback reply");
+    return getFallbackReply(lead, settings, incomingMessage);
+  }
+
+  try {
+    const businessName = settings.business_name || "our business";
+    const businessDesc = settings.business_description || "";
+    const tone = settings.ai_tone || "friendly";
+    const leadName = lead.name.split(" ")[0];
+
+    // Build conversation context from history
+    const historyContext = conversationHistory
+      .slice(-10) // Last 10 messages for context
+      .map(
+        (m) =>
+          `${m.direction === "inbound" ? leadName : "You"}: ${m.body}`
+      )
+      .join("\n");
+
+    const systemPrompt = `You are a helpful, ${tone} customer service assistant for ${businessName}.${
+      businessDesc ? ` The business ${businessDesc}.` : ""
+    }
+
+Your job is to respond to incoming Facebook Messenger messages from potential leads/customers.
+
+Guidelines:
+- Be ${tone} and conversational — this is Messenger, not email
+- Keep replies concise (2-4 sentences max) — people expect quick, short messages on Messenger
+- Answer their questions helpfully and accurately based on what you know about the business
+- If they ask something you don't know, be honest and offer to connect them with someone who can help
+- Try to move the conversation toward booking a call or meeting when appropriate, but don't be pushy
+- Use the customer's first name naturally
+- Don't use formal email sign-offs — this is a chat
+- Never make up specific details about products, pricing, or services you don't know about
+- If this is the first message from a new lead, welcome them warmly`;
+
+    const userPrompt = `${
+      historyContext
+        ? `Previous conversation:\n${historyContext}\n\n`
+        : ""
+    }New message from ${leadName}: "${incomingMessage}"
+
+Reply as the business assistant:`;
+
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 300,
+        system: systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content: userPrompt,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Anthropic API error:", response.status, errorText);
+      return getFallbackReply(lead, settings, incomingMessage);
+    }
+
+    const data = await response.json();
+    const reply =
+      data.content?.[0]?.text || getFallbackReply(lead, settings, incomingMessage);
+
+    return reply.trim();
+  } catch (error) {
+    console.error("Error calling Anthropic API:", error);
+    return getFallbackReply(lead, settings, incomingMessage);
+  }
 }
 
+/**
+ * Simple fallback reply when AI is unavailable.
+ */
+function getFallbackReply(
+  lead: Lead,
+  settings: Settings,
+  _incomingMessage: string
+): string {
+  const name = lead.name.split(" ")[0];
+  const business = settings.business_name || "us";
+  return `Hey ${name}! Thanks for reaching out to ${business}. We got your message and someone from our team will get back to you shortly!`;
+}
+
+/**
+ * Legacy function — kept for compatibility with email follow-ups.
+ */
 export async function generateFollowUp(
   lead: Lead,
   settings: Settings,
   stepNumber: number,
   _previousMessages: Message[] = []
 ): Promise<{ subject: string; body: string }> {
-  // Simulate AI thinking time in demo mode
   await new Promise((resolve) => setTimeout(resolve, 300));
 
   const tone = settings.ai_tone || "professional";
-  const templates = TEMPLATES[tone] || TEMPLATES.professional;
-  const template = templates[(stepNumber - 1) % templates.length];
-  const body = fillTemplate(template, lead, settings);
+  const name = lead.name.split(" ")[0];
+  const business = settings.business_name || "our team";
+  const signature = settings.signature || business;
 
-  const subjects = [
-    `Following up — ${settings.business_name || "Quick question"}`,
-    `Re: ${lead.company || lead.name} — next steps?`,
-    `Checking in, ${lead.name.split(" ")[0]}`,
-    `Don't want you to miss this, ${lead.name.split(" ")[0]}`,
-    `Last follow-up — ${settings.business_name || ""}`,
-  ];
+  const templates: Record<string, string[]> = {
+    professional: [
+      `Hi ${name},\n\nI wanted to follow up on my previous message. I believe ${business} could provide significant value to your team.\n\nWould you have 15 minutes this week for a quick call?\n\nBest regards,\n${signature}`,
+    ],
+    friendly: [
+      `Hey ${name}! \n\nJust bumping this to the top of your inbox. I'd love to chat about how ${business} can help you out.\n\nGot a few minutes this week?\n\n${signature}`,
+    ],
+    casual: [
+      `Hey ${name},\n\nQuick follow-up! Would love to chat when you get a chance.\n\n${signature}`,
+    ],
+    urgent: [
+      `Hi ${name},\n\nI wanted to reach out one more time. We have limited availability this month and I'd hate for you to miss out.\n\nCan we connect today or tomorrow?\n\n${signature}`,
+    ],
+  };
 
-  const subject = subjects[Math.min(stepNumber - 1, subjects.length - 1)];
+  const body = (templates[tone] || templates.professional)[0];
+  const subject = `Following up — ${business}`;
 
   return { subject, body };
 }
