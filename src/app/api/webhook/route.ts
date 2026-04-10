@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendMessage, sendTypingIndicator, getUserProfile } from "@/lib/meta";
-import { generateFollowUp } from "@/lib/ai";
+import { generateMessengerReply } from "@/lib/ai";
 import type { Lead, Settings } from "@/lib/types";
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN!;
@@ -159,12 +159,20 @@ export async function POST(req: NextRequest) {
         // Show typing indicator
         await sendTypingIndicator(senderId);
 
-        // Generate a reply
-        const { body: replyBody } = await generateFollowUp(
+        // Fetch recent conversation history for context
+        const { data: recentMessages } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("lead_id", lead.id)
+          .order("sent_at", { ascending: true })
+          .limit(10);
+
+        // Generate a contextual AI reply
+        const replyBody = await generateMessengerReply(
           lead as Lead,
           userSettings,
-          1,
-          []
+          messageText,
+          recentMessages || []
         );
 
         // Send the reply via Messenger
