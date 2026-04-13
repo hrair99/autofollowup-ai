@@ -189,7 +189,7 @@ export async function GET(request: Request) {
             direction: "outbound",
             channel: "email",
             channel_type: "email",
-            subject: `Following up —" ${biz}`,
+            subject: `Following up — ${biz}`,
             body,
             ai_generated: true,
             status: "sent",
@@ -214,6 +214,7 @@ export async function GET(request: Request) {
             last_contacted_at: new Date().toISOString(),
           })
           .eq("id", followUp.lead_id);
+
         processed++;
       }
     } catch (error) {
