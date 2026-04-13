@@ -1,5 +1,5 @@
 // ============================================
-// Public Reply Service â€” Safe public comment replies
+// Public Reply Service — Safe public comment replies
 // Used as fallback when Private Reply is unavailable
 // ============================================
 
@@ -63,7 +63,7 @@ export async function likeComment(commentId: string, pageId?: string): Promise<b
 
     return true;
   } catch {
-    // Non-critical â€” don't fail on like errors
+    // Non-critical — don't fail on like errors
     return false;
   }
 }
@@ -75,7 +75,7 @@ export async function likeComment(commentId: string, pageId?: string): Promise<b
 const DEFAULT_TEMPLATES: Record<string, string[]> = {
   pricing_request: [
     "Thanks for your interest! Best way to get a quote is to send us a message or use our enquiry form{link_suffix}",
-    "Hey! ICing depends on the job â€” shoot us a DM and we'll sort you out{link_suffix}",
+    "Hey! Pricing depends on the job — shoot us a DM and we'll sort you out{link_suffix}",
   ],
   quote_request: [
     "We'd love to help! Send us a message with your details and we'll get a quote to you{link_suffix}",
@@ -87,11 +87,11 @@ const DEFAULT_TEMPLATES: Record<string, string[]> = {
   ],
   lead_interest: [
     "Thanks for reaching out! Send us a message and we'll help you out{link_suffix}",
-    "Hey! Happy to help â€” shoot us a DM for more info{link_suffix}",
+    "Hey! Happy to help — shoot us a DM for more info{link_suffix}",
   ],
   support_request: [
     "Sorry to hear that! Send us a message with the details and we'll get someone onto it{link_suffix}",
-    "We'll get this sorted for you â„¤ DM us with the details{link_suffix}",
+    "We'll get this sorted for you — DM us with the details{link_suffix}",
   ],
   default: [
     "Thanks! Send us a message and we'll help you out{link_suffix}",
@@ -101,8 +101,8 @@ const DEFAULT_TEMPLATES: Record<string, string[]> = {
 
 /**
  * Pick a template-based public reply.
- #•/
-ep@rt function getTemplateReply(
+ */
+export function getTemplateReply(
   classification: CommentClassification,
   options: {
     enquiryFormUrl?: string | null;
@@ -127,6 +127,47 @@ ep@rt function getTemplateReply(
   // Replace link suffix
   const linkSuffix = enquiryFormUrl ? `: ${enquiryFormUrl}` : "";
   reply = reply.replace("{link_suffix}", linkSuffix);
+
+  return reply;
+}
+
+/**
+ * Generate an AI-powered public reply (for higher quality responses).
+ */
+export async function generateAiPublicReply(
+  commentText: string,
+  options: {
+    classification: CommentClassification;
+    businessName: string;
+    enquiryFormUrl?: string | null;
+    tone?: string;
+  }
+): Promise<string | null> {
+  const { classification, businessName, enquiryFormUrl, tone } = options;
+  const voiceTone = tone || "friendly";
+
+  const systemPrompt = `You are a ${voiceTone} social media assistant for ${businessName} (HVAC/air conditioning company).
+Write a short public reply to a Facebook comment from a potential customer.
+
+Rules:
+- 1-2 sentences MAX
+- Be ${voiceTone} and natural
+- Encourage them to send a DM or use the enquiry form
+- Do NOT include hashtags
+- Do NOT include emojis
+- Do NOT mention competitor names
+- Do NOT make specific promises about pricing or availability
+${enquiryFormUrl ? `- If appropriate, include this enquiry form link: ${enquiryFormUrl}` : "- Direct them to send the page a message"}
+
+The comment was classified as: ${classification}`;
+
+  const reply = await groqChat(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: `Comment: "${commentText}"\n\nPublic reply:` },
+    ],
+    { maxTokens: 80, temperature: 0.7 }
+  );
 
   return reply;
 }
