@@ -5,14 +5,12 @@
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { classifyMessage } from "../ai/classify";
-import { generateConstrainedReply, generateCommentReply } from "../ai/reply";
+import { generateConstrainedReply } from "../ai/reply";
 import { resolveNextAction, containsEscalationKeyword } from "./actions";
 import { resolveStageTransition, shouldSendEnquiryLink, stageToLeadStatus } from "./stages";
 import { mergeQualificationData } from "./qualification";
 import { sendMessage, sendTypingIndicator } from "../meta/messenger";
-import { handleCommentEngagement } from "../meta/comments";
 import { getUserProfile } from "../meta/client";
-import { isLeadSignalComment } from "../ai/classify";
 import type {
   Lead,
   Settings,
@@ -215,99 +213,17 @@ export async function handleMessengerMessage(event: NormalizedWebhookEvent): Pro
 }
 
 // ============================================
-// COMMENT HANDLER
+// COMMENT HANDLER (Legacy — delegates to commentHandler.ts)
 // ============================================
 
+import { handleComment } from "./commentHandler";
+
+/**
+ * @deprecated Use handleComment from commentHandler.ts directly.
+ * Kept for backward compatibility.
+ */
 export async function handleCommentEvent(event: NormalizedWebhookEvent): Promise<void> {
-  const supabase = getServiceClient();
-  const { pageId, senderId, text, commentId, postId } = event;
-
-  if (!commentId) return;
-
-  console.log(`[Engine] Comment on page ${pageId} from ${senderId}: ${text}`);
-
-  try {
-    // Check if this is a lead signal
-    if (!isLeadSignalComment(text)) {
-      console.log("[Engine] Comment is not a lead signal, skipping");
-      return;
-    }
-
-    // Find or create lead from commenter
-    const lead = await findOrCreateLead(supabase, senderId, pageId, {
-      source: "comment",
-      source_post_id: postId,
-      source_comment_id: commentId,
-    });
-    if (!lead) return;
-
-    const { settings } = await loadUserConfig(supabase, lead.user_id);
-
-    // Save the comment as an inbound message
-    await saveMessage(supabase, {
-      lead_id: lead.id,
-      user_id: lead.user_id,
-      direction: "inbound",
-      channel: "messenger",
-      channel_type: "comment",
-      body: text,
-      platform_message_id: commentId,
-      sent_at: new Date().toISOString(),
-      metadata: { post_id: postId, comment_id: commentId },
-    });
-
-    // Generate replies
-    const publicReply = await generateCommentReply(text, settings);
-    const link = settings.enquiry_form_url;
-    const privateMessage = link
-      ? `Hey! Thanks for your comment. Happy to help — best way to get things moving is here: ${link}`
-      : `Hey! Thanks for your comment. Send us a message here and we'll help you out!`;
-
-    // Handle comment engagement (try private → fall back to public)
-    const result = await handleCommentEngagement(commentId, privateMessage, publicReply, {
-      pageId,
-      dmEnabled: settings.dm_automation_enabled,
-      autoReplyEnabled: settings.comment_auto_reply,
-    });
-
-    // Save the outbound reply
-    const channelType = result.action === "private_reply" ? "private_message" : "public_reply";
-    const replyBody = result.action === "private_reply" ? privateMessage : publicReply;
-
-    if (result.action !== "like_only") {
-      await saveMessage(supabase, {
-        lead_id: lead.id,
-        user_id: lead.user_id,
-        direction: "outbound",
-        channel: "messenger",
-        channel_type: channelType,
-        body: replyBody,
-        ai_generated: true,
-        sent_at: new Date().toISOString(),
-        metadata: { comment_id: commentId, reply_type: result.action },
-      });
-    }
-
-    // Update lead
-    await supabase.from("leads").update({
-      conversion_stage: "engaged",
-      status: "contacted",
-      last_contacted_at: new Date().toISOString(),
-    }).eq("id", lead.id);
-
-    await logAutomation(supabase, lead.id, "comment_reply", channelType, result.action, {
-      comment_id: commentId,
-      post_id: postId,
-    });
-
-    console.log(`[Engine] Comment handled: ${result.action} for ${senderId}`);
-  } catch (error) {
-    console.error("[Engine] Error handling comment:", error);
-    await logAutomation(supabase, null, "error", "comment", "failed", {
-      commentId,
-      error: String(error),
-    });
-  }
+  return handleComment(event);
 }
 
 // ============================================
@@ -436,6 +352,15 @@ function getDefaultSettings(userId: string): Settings {
     comment_reply_templates: [],
     dm_automation_enabled: true,
     escalation_keywords: [],
+    // Comment automation v2
+    comment_monitoring_enabled: true,
+    private_reply_enabled: true,
+    public_reply_enabled: true,
+    private_reply_templates: [],
+    comment_lead_keywords: [],
+    comment_confidence_threshold: 0.4,
+    comment_escalation_threshold: 0.8,
+    comment_cooldown_minutes: 5,
     created_at: "",
     updated_at: "",
   };
