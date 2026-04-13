@@ -1,7 +1,8 @@
 import { createServerSupabase } from "@/lib/supabase/server";
-import { generateFollowUp, generateInitialOutreach } from "@/lib/ai";
+import { generateInitialOutreach } from "A/lib/ai";
+import { groqChat } from "@/lib/ai/groq-client";
 import { NextResponse } from "next/server";
-import type { Lead, Settings, Message } from "@/lib/types";
+import type { Lead, Settings, Message } from "A/lib/types";
 
 export async function POST(request: Request) {
   try {
@@ -13,7 +14,6 @@ export async function POST(request: Request) {
 
     const { leadId } = await request.json();
 
-    // Get lead
     const { data: lead } = await supabase
       .from("leads")
       .select("*")
@@ -25,28 +25,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     }
 
-    // Get settings
     const { data: settings } = await supabase
       .from("settings")
       .select("*")
       .eq("user_id", user.id)
       .single();
 
-    const userSettings: Settings = settings || {
-      id: "",
-      user_id: user.id,
-      max_follow_ups: 5,
-      follow_up_interval_days: 3,
-      stop_on_reply: true,
-      ai_tone: "professional",
-      business_name: null,
-      business_description: null,
-      signature: null,
-      created_at: "",
-      updated_at: "",
-    };
+    const userSettings = (settings || {}) as Partial<Settings>;
 
-    // Get previous messages
     const { data: messages } = await supabase
       .from("messages")
       .select("*")
@@ -57,10 +43,31 @@ export async function POST(request: Request) {
 
     let result;
     if (typedMessages.length === 0) {
-      result = await generateInitialOutreach(lead as Lead, userSettings);
+      result = await generateInitialOutreach(lead as Lead, {
+        business_name: userSettings.business_name || null,
+        business_description: userSettings.business_description || null,
+        signature: userSettings.signature || null,
+      });
     } else {
-      const stepNumber = typedMessages.filter((m) => m.direction === "outbound").length + 1;
-      result = await generateFollowUp(lead as Lead, userSettings, stepNumber, typedMessages);
+      // Generate follow-up using Groq
+      const name = (lead as Lead).name.split(" ")[0];
+      const biz = userSettings.business_name || "our team";
+
+      const reply = await groqChat([
+        {
+          role: "system",
+          content: `You are a helpful business assistant for ${biz}. Write a short follow-up email to ${name}. Be ${userSettings.ai_tone || "professional"} and concise.`,
+        },
+        {
+          role: "user",
+          content: `Write follow-up email #${typedMessages.filter((m) => m.direction === "outbound").length + 1} for ${name} from ${(lead as Lead).company || "unknown company"}.`,
+        },
+      ], { maxTokens: 300 });
+
+      result = {
+        subject: `Following up — ${biz}`,
+        body: reply || `Hi ${name},\n\nJust following up on my previous message. Would love to chat when you get a chance.\n\n${userSettings.signature || biz}`,
+      };
     }
 
     return NextResponse.json(result);

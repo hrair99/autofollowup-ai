@@ -8,6 +8,9 @@ const statusStyles: Record<LeadStatus, string> = {
   responded: "bg-green-50 text-green-700 ring-green-600/20",
   booked: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   dead: "bg-gray-50 text-gray-600 ring-gray-500/10",
+  engaged: "bg-indigo-50 text-indigo-700 ring-indigo-700/10",
+  qualified: "bg-teal-50 text-teal-700 ring-teal-600/20",
+  escalated: "bg-red-50 text-red-700 ring-red-600/20",
 };
 
 const statusLabels: Record<LeadStatus, string> = {
@@ -17,6 +20,9 @@ const statusLabels: Record<LeadStatus, string> = {
   responded: "Responded",
   booked: "Booked",
   dead: "Dead",
+  engaged: "Engaged",
+  qualified: "Qualified",
+  escalated: "Escalated",
 };
 
 export default function StatusBadge({ status }: { status: LeadStatus }) {
@@ -24,10 +30,10 @@ export default function StatusBadge({ status }: { status: LeadStatus }) {
     <span
       className={clsx(
         "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset",
-        statusStyles[status]
+        statusStyles[status] || "bg-gray-50 text-gray-600 ring-gray-500/10"
       )}
     >
-      {statusLabels[status]}
+      {statusLabels[status] || status}
     </span>
   );
 }

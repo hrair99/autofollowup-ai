@@ -1,22 +1,27 @@
-import { createClient } from "@supabase/supabase-js";
-import { generateFollowUp } from "@/lib/ai";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { generateMessengerFollowUp } from "@/lib/ai/reply";
+import { sendMessage } from "@/lib/meta/messenger";
 import { NextResponse } from "next/server";
 import type { Lead, Settings, Message, FollowUp } from "@/lib/types";
 
-// This endpoint is hit by a cron job (e.g., Vercel Cron or external)
-// Uses service role key to bypass RLS
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DB = SupabaseClient<any, any, any>;
+function getSupabase(): DB {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+}
+
+// ============================================
+// Cron job — Process pending follow-ups
+// Sends context-aware Messenger follow-ups with enquiry link
+// ============================================
 
 export async function GET(request: Request) {
-  // Verify cron secret
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const supabase = getSupabase();
 
   // Get all pending follow-ups that are due
   const { data: dueFollowUps } = await supabase
@@ -32,6 +37,7 @@ export async function GET(request: Request) {
   }
 
   let processed = 0;
+  let skipped = 0;
 
   for (const followUp of dueFollowUps as FollowUp[]) {
     try {
@@ -42,12 +48,21 @@ export async function GET(request: Request) {
         .eq("id", followUp.lead_id)
         .single();
 
-      if (!lead || ["responded", "booked", "dead"].includes(lead.status)) {
-        // Cancel this follow-up
-        await supabase
-          .from("follow_ups")
-          .update({ status: "cancelled" })
-          .eq("id", followUp.id);
+      if (!lead) {
+        await cancelFollowUp(supabase, followUp.id);
+        skipped++;
+        continue;
+      }
+
+      // Stop conditions: responded, booked, dead, enquiry completed
+      if (
+        ["responded", "booked", "dead"].includes(lead.status) ||
+        lead.enquiry_form_completed ||
+        lead.conversion_stage === "booked" ||
+        lead.conversion_stage === "dead"
+      ) {
+        await cancelFollowUp(supabase, followUp.id);
+        skipped++;
         continue;
       }
 
@@ -58,97 +73,198 @@ export async function GET(request: Request) {
         .eq("user_id", followUp.user_id)
         .single();
 
-      const userSettings: Settings = settings || {
-        id: "",
-        user_id: followUp.user_id,
-        max_follow_ups: 5,
-        follow_up_interval_days: 3,
-        stop_on_reply: true,
-        ai_tone: "professional",
-        business_name: null,
-        business_description: null,
-        signature: null,
-        created_at: "",
-        updated_at: "",
-      };
+      const userSettings: Settings = settings || getDefaultSettings(followUp.user_id);
 
-      // Check for inbound replies (stop_on_reply)
+      // Check for recent inbound replies (stop_on_reply)
       if (userSettings.stop_on_reply) {
         const { data: replies } = await supabase
           .from("messages")
           .select("id")
           .eq("lead_id", followUp.lead_id)
           .eq("direction", "inbound")
+          .gt("created_at", followUp.created_at) // Only replies after follow-up was scheduled
           .limit(1);
 
         if (replies && replies.length > 0) {
-          await supabase
-            .from("follow_ups")
-            .update({ status: "cancelled" })
-            .eq("id", followUp.id);
-          await supabase
-            .from("leads")
-            .update({ status: "responded" })
-            .eq("id", followUp.lead_id);
+          await cancelFollowUp(supabase, followUp.id);
+          skipped++;
           continue;
         }
       }
 
-      // Get previous messages for context
+      // Get conversation history
       const { data: messages } = await supabase
         .from("messages")
         .select("*")
         .eq("lead_id", followUp.lead_id)
-        .order("created_at", { ascending: true });
+        .order("sent_at", { ascending: true })
+        .limit(10);
 
-      // Generate message
-      const generated = await generateFollowUp(
-        lead as Lead,
-        userSettings,
-        followUp.step_number,
-        (messages || []) as Message[]
-      );
+      const recentMessages = (messages || []) as Message[];
 
-      // Create message record
-      const { data: message } = await supabase
-        .from("messages")
-        .insert({
+      // Determine if this is a Messenger lead
+      const isMessengerLead = lead.platform_user_id && lead.source === "messenger";
+
+      if (isMessengerLead) {
+        // Generate context-aware Messenger follow-up
+        const followUpText = await generateMessengerFollowUp(
+          lead as Lead,
+          userSettings,
+          recentMessages,
+          followUp.step_number
+        );
+
+        // Send via Messenger
+        try {
+          await sendMessage(lead.platform_user_id!, followUpText, lead.page_id || undefined);
+        } catch (sendError) {
+          console.error(`Failed to send Messenger follow-up to ${lead.platform_user_id}:`, sendError);
+          // Don't mark as sent if sending failed
+          continue;
+        }
+
+        // Save the outbound message
+        const { data: message } = await supabase
+          .from("messages")
+          .insert({
+            lead_id: followUp.lead_id,
+            user_id: followUp.user_id,
+            direction: "outbound",
+            channel: "messenger",
+            channel_type: "messenger",
+            body: followUpText,
+            ai_generated: true,
+            status: "sent",
+            sent_at: new Date().toISOString(),
+            metadata: { follow_up_step: followUp.step_number },
+          })
+          .select()
+          .single();
+
+        // Mark follow-up as sent
+        await supabase
+          .from("follow_ups")
+          .update({
+            status: "sent",
+            executed_at: new Date().toISOString(),
+            message_id: message?.id,
+          })
+          .eq("id", followUp.id);
+
+        // Update lead
+        await supabase
+          .from("leads")
+          .update({
+            status: "following_up",
+            last_contacted_at: new Date().toISOString(),
+          })
+          .eq("id", followUp.lead_id);
+
+        // Log
+        await supabase.from("automation_logs").insert({
           lead_id: followUp.lead_id,
-          user_id: followUp.user_id,
-          direction: "outbound",
-          channel: "email",
-          subject: generated.subject,
-          body: generated.body,
-          status: "sent",
-          sent_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+          event_type: "follow_up_sent",
+          channel: "messenger",
+          action_taken: `follow_up_step_${followUp.step_number}`,
+          details: { step: followUp.step_number },
+          success: true,
+        });
 
-      // Mark follow-up as sent
-      await supabase
-        .from("follow_ups")
-        .update({
-          status: "sent",
-          executed_at: new Date().toISOString(),
-          message_id: message?.id,
-        })
-        .eq("id", followUp.id);
+        processed++;
+      } else {
+        // Email follow-up (legacy behavior, kept for non-Messenger leads)
+        const name = lead.name.split(" ")[0];
+        const biz = userSettings.business_name || "our team";
+        const link = userSettings.enquiry_form_url;
 
-      // Update lead
-      await supabase
-        .from("leads")
-        .update({
-          status: "following_up",
-          last_contacted_at: new Date().toISOString(),
-        })
-        .eq("id", followUp.lead_id);
+        const body = link
+          ? `Hi ${name},\n\nJust checking in — still happy to help with your enquiry. Best way to get things moving is here: ${link}\n\nCheers,\n${biz}`
+          : `Hi ${name},\n\nJust following up on my previous message. Would love to help if you're still interested.\n\nBest,\n${biz}`;
 
-      processed++;
+        const { data: message } = await supabase
+          .from("messages")
+          .insert({
+            lead_id: followUp.lead_id,
+            user_id: followUp.user_id,
+            direction: "outbound",
+            channel: "email",
+            channel_type: "email",
+            subject: `Following up —" ${biz}`,
+            body,
+            ai_generated: true,
+            status: "sent",
+            sent_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        await supabase
+          .from("follow_ups")
+          .update({
+            status: "sent",
+            executed_at: new Date().toISOString(),
+            message_id: message?.id,
+          })
+          .eq("id", followUp.id);
+
+        await supabase
+          .from("leads")
+          .update({
+            status: "following_up",
+            last_contacted_at: new Date().toISOString(),
+          })
+          .eq("id", followUp.lead_id);
+        processed++;
+      }
     } catch (error) {
       console.error(`Error processing follow-up ${followUp.id}:`, error);
     }
   }
 
-  return NextResponse.json({ processed, total: dueFollowUps.length });
+  return NextResponse.json({ processed, skipped, total: dueFollowUps.length });
+}
+
+async function cancelFollowUp(
+  supabase: DB,
+  followUpId: string
+) {
+  await supabase
+    .from("follow_ups")
+    .update({ status: "cancelled" })
+    .eq("id", followUpId);
+}
+
+function getDefaultSettings(userId: string): Settings {
+  return {
+    id: "",
+    user_id: userId,
+    max_follow_ups: 5,
+    follow_up_interval_days: 3,
+    stop_on_reply: true,
+    ai_tone: "friendly",
+    ai_style_instructions: null,
+    first_reply_behaviour: "smart_reply",
+    business_name: "HR AIR",
+    business_description: null,
+    signature: null,
+    service_type: "HVAC",
+    service_areas: [],
+    service_categories: [],
+    callout_fee: null,
+    quote_policy: null,
+    emergency_available: false,
+    after_hours_available: false,
+    operating_hours: null,
+    enquiry_form_url: "https://book.servicem8.com/request_service_online_booking?strVendorUUID=2eec0c0d-dbd4-4b52-aaf6-22f38ff2175b#5990b36a-64bd-4aa9-9e5b-23f620791f6b",
+    contact_email: "harrison@hrair.com.au",
+    contact_phone: "0431 703 913",
+    meta_page_id: null,
+    meta_verify_token: null,
+    comment_auto_reply: true,
+    comment_reply_templates: [],
+    dm_automation_enabled: true,
+    escalation_keywords: [],
+    created_at: "",
+    updated_at: "",
+  };
 }

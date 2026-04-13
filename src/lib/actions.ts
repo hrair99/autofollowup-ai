@@ -2,10 +2,10 @@
 
 import { createServerSupabase } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import type { LeadStatus, AiTone } from "./types";
+import type { LeadStatus, AiTone, ConversionStage } from "./types";
 
 // ============================================
-// Server Actions
+// Server Actions — v2
 // ============================================
 
 export async function createLead(formData: FormData) {
@@ -21,6 +21,8 @@ export async function createLead(formData: FormData) {
     company: (formData.get("company") as string) || null,
     source: (formData.get("source") as string) || "manual",
     notes: (formData.get("notes") as string) || null,
+    conversion_stage: "new",
+    qualification_data: {},
   });
 
   if (error) throw new Error(error.message);
@@ -41,7 +43,6 @@ export async function updateLeadStatus(leadId: string, status: LeadStatus) {
 
   if (error) throw new Error(error.message);
 
-  // Cancel pending follow-ups if lead is done
   if (["responded", "booked", "dead"].includes(status)) {
     await supabase
       .from("follow_ups")
@@ -53,6 +54,63 @@ export async function updateLeadStatus(leadId: string, status: LeadStatus) {
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/leads");
   revalidatePath("/dashboard");
+}
+
+export async function updateConversionStage(leadId: string, stage: ConversionStage) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const update: Record<string, unknown> = { conversion_stage: stage };
+
+  if (stage === "booked") {
+    update.status = "booked";
+    update.enquiry_form_completed = true;
+  } else if (stage === "dead") {
+    update.status = "dead";
+  }
+
+  await supabase.from("leads").update(update).eq("id", leadId).eq("user_id", user.id);
+
+  if (stage === "booked" || stage === "dead") {
+    await supabase
+      .from("follow_ups")
+      .update({ status: "cancelled" })
+      .eq("lead_id", leadId)
+      .eq("status", "pending");
+  }
+
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  revalidatePath("/dashboard");
+}
+
+export async function markEnquiryCompleted(leadId: string) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  await supabase.from("leads").update({
+    enquiry_form_completed: true,
+    conversion_stage: "booked",
+    status: "booked",
+  }).eq("id", leadId).eq("user_id", user.id);
+
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+}
+
+export async function toggleHumanReview(leadId: string, requires: boolean, reason?: string) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  await supabase.from("leads").update({
+    requires_human_review: requires,
+    escalation_reason: requires ? (reason || "manual_escalation") : null,
+  }).eq("id", leadId).eq("user_id", user.id);
+
+  revalidatePath(`/leads/${leadId}`);
 }
 
 export async function deleteLead(leadId: string) {
@@ -76,15 +134,42 @@ export async function saveSettings(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
 
+  // Parse arrays from comma-separated strings
+  const parseArray = (key: string): string[] => {
+    const val = formData.get(key) as string;
+    if (!val) return [];
+    return val.split(",").map((s) => s.trim()).filter(Boolean);
+  };
+
   const settingsData = {
     user_id: user.id,
+    // Follow-up config
     max_follow_ups: parseInt(formData.get("max_follow_ups") as string) || 5,
     follow_up_interval_days: parseInt(formData.get("follow_up_interval_days") as string) || 3,
     stop_on_reply: formData.get("stop_on_reply") === "on",
-    ai_tone: (formData.get("ai_tone") as AiTone) || "professional",
+    // AI config
+    ai_tone: (formData.get("ai_tone") as AiTone) || "friendly",
+    ai_style_instructions: (formData.get("ai_style_instructions") as string) || null,
+    first_reply_behaviour: (formData.get("first_reply_behaviour") as string) || "smart_reply",
+    // Business info
     business_name: (formData.get("business_name") as string) || null,
     business_description: (formData.get("business_description") as string) || null,
     signature: (formData.get("signature") as string) || null,
+    service_type: (formData.get("service_type") as string) || null,
+    service_areas: parseArray("service_areas"),
+    service_categories: parseArray("service_categories"),
+    callout_fee: (formData.get("callout_fee") as string) || null,
+    quote_policy: (formData.get("quote_policy") as string) || null,
+    emergency_available: formData.get("emergency_available") === "on",
+    after_hours_available: formData.get("after_hours_available") === "on",
+    operating_hours: (formData.get("operating_hours") as string) || null,
+    enquiry_form_url: (formData.get("enquiry_form_url") as string) || null,
+    contact_email: (formData.get("contact_email") as string) || null,
+    contact_phone: (formData.get("contact_phone") as string) || null,
+    // Comment automation
+    comment_auto_reply: formData.get("comment_auto_reply") === "on",
+    dm_automation_enabled: formData.get("dm_automation_enabled") === "on",
+    escalation_keywords: parseArray("escalation_keywords"),
   };
 
   const { data: existing } = await supabase
@@ -102,12 +187,52 @@ export async function saveSettings(formData: FormData) {
   revalidatePath("/settings");
 }
 
+// FAQ management
+export async function addFaqEntry(formData: FormData) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  await supabase.from("faq_entries").insert({
+    user_id: user.id,
+    question: formData.get("question") as string,
+    answer: formData.get("answer") as string,
+    category: (formData.get("category") as string) || "general",
+    keywords: ((formData.get("keywords") as string) || "").split(",").map((s) => s.trim()).filter(Boolean),
+  });
+
+  revalidatePath("/settings");
+}
+
+export async function updateFaqEntry(faqId: string, formData: FormData) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  await supabase.from("faq_entries").update({
+    question: formData.get("question") as string,
+    answer: formData.get("answer") as string,
+    category: (formData.get("category") as string) || "general",
+    keywords: ((formData.get("keywords") as string) || "").split(",").map((s) => s.trim()).filter(Boolean),
+  }).eq("id", faqId).eq("user_id", user.id);
+
+  revalidatePath("/settings");
+}
+
+export async function deleteFaqEntry(faqId: string) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  await supabase.from("faq_entries").delete().eq("id", faqId).eq("user_id", user.id);
+  revalidatePath("/settings");
+}
+
 export async function sendMessage(leadId: string, subject: string, body: string) {
   const supabase = createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
 
-  // Create the message
   const { data: message, error } = await supabase
     .from("messages")
     .insert({
@@ -115,6 +240,7 @@ export async function sendMessage(leadId: string, subject: string, body: string)
       user_id: user.id,
       direction: "outbound",
       channel: "email",
+      channel_type: "email",
       subject,
       body,
       status: "sent",
@@ -125,7 +251,6 @@ export async function sendMessage(leadId: string, subject: string, body: string)
 
   if (error) throw new Error(error.message);
 
-  // Update lead status and last_contacted_at
   await supabase
     .from("leads")
     .update({
@@ -145,7 +270,6 @@ export async function scheduleFollowUps(leadId: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
 
-  // Get settings
   const { data: settings } = await supabase
     .from("settings")
     .select("*")
@@ -155,7 +279,6 @@ export async function scheduleFollowUps(leadId: string) {
   const maxFollowUps = settings?.max_follow_ups || 5;
   const intervalDays = settings?.follow_up_interval_days || 3;
 
-  // Get existing follow-ups
   const { data: existing } = await supabase
     .from("follow_ups")
     .select("*")
@@ -180,7 +303,6 @@ export async function scheduleFollowUps(leadId: string) {
 
   await supabase.from("follow_ups").insert(followUps);
 
-  // Update lead status
   await supabase
     .from("leads")
     .update({ status: "following_up" })
