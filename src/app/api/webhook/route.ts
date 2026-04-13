@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeWebhookEvents, verifyWebhook } from "@/lib/meta/webhooks";
-import { handleMessengerMessage, handleCommentEvent } from "@/lib/conversation/engine";
+import { handleMessengerMessage } from "@/lib/conversation/engine";
+import { handleComment } from "@/lib/conversation/commentHandler";
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "autofollowup_verify_token_2024";
 
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
         if (event.type === "message") {
           await handleMessengerMessage(event);
         } else if (event.type === "comment") {
-          await handleCommentEvent(event);
+          await handleComment(event);
         }
       } catch (eventError) {
         // Log but don't fail the whole webhook
