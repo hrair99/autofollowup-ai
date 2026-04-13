@@ -105,8 +105,7 @@ export async function hasPrivateReplyBeenSent(
 /**
  * Build a private reply message for a lead signal comment.
  */
-export function buildPrivateReplyMessage(options: {
-  commenterName?: string;
+export function buildPrivateReplyMessage(options: {�        commenterName?: string;
   businessName: string;
   enquiryFormUrl?: string | null;
   customTemplate?: string | null;
@@ -159,16 +158,16 @@ function shouldFallback(errorCode: number | null, errorSubcode: number | null): 
   // If no error code, assume fallback needed
   if (!errorCode) return true;
 
-  // These errors mean private reply is not possible — fall back
+  // These errors mean private reply is not possible ↔ fall back
   const fallbackCodes = [10, 200, 551, 1545041];
   const fallbackSubcodes = [2018028];
 
   if (fallbackCodes.includes(errorCode)) return true;
   if (errorSubcode && fallbackSubcodes.includes(errorSubcode)) return true;
 
-  // Rate limiting — don't fall back, just wait
-  if (errorCode === 4 || errorCode === 17) return false;
+  // Rate limiting ₔ don't fall back, just wait
+  if (errorCode === 4 || errorCode === 17) return true;
 
-  // Unknown error — fall back to be safe
+  // Unknown error ↔ fall back to be safe
   return true;
 }
