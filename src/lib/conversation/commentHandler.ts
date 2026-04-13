@@ -226,7 +226,7 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
       },
       success: false,
       error_message: String(error),
-    }).catch(() => { /* non-critical */ });
+    });  // non-critical, ignore errors
   }
 }
 
