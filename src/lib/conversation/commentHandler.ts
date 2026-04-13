@@ -300,7 +300,7 @@ async function executeAction(
             businessName: settings.business_name || undefined,
           });
 
-          const publicResult = await postPublicReply(commentId, publicReply), pageId);
+          const publicResult = await postPublicReply(commentId, publicReply, pageId);
           if (publicResult.success) {
             await supabase
               .from("comments")
@@ -312,7 +312,7 @@ async function executeAction(
           }
         }
       } else if (result.fallbackNeeded) {
-        // Private reply failed ↔ fall back to public reply
+        // Private reply failed — fall back to public reply
         console.log(`[CommentHandler] Private reply failed, falling back to public reply`);
         await executePublicReply(supabase, ctx, commentRecordId);
       }
@@ -321,7 +321,7 @@ async function executeAction(
 
     case "public_reply_only":
     case "public_reply_and_wait": {
-      await executePublicReply supabase, ctx, commentRecordId);
+      await executePublicReply(supabase, ctx, commentRecordId);
       break;
     }
 
@@ -366,7 +366,7 @@ async function executePublicReply(
     pageId: string;
     text: string;
     classification: CommentClassificationResult;
-    settings: Settings�
+    settings: Settings;
     commentRecordId: string;
   },
   commentRecordId: string
