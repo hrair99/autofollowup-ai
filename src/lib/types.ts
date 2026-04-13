@@ -92,6 +92,11 @@ export interface Lead {
   ai_confidence: number | null;
   qualification_data: QualificationData;
   page_id: string | null;
+  // Comment automation fields
+  first_comment_id: string | null;
+  comment_count: number;
+  private_reply_count: number;
+  last_comment_at: string | null;
 }
 
 export interface QualificationData {
@@ -165,11 +170,20 @@ export interface Settings {
   // Meta config
   meta_page_id: string | null;
   meta_verify_token: string | null;
-  // Automation config
+  // Automation config (legacy)
   comment_auto_reply: boolean;
   comment_reply_templates: string[];
   dm_automation_enabled: boolean;
   escalation_keywords: string[];
+  // Comment automation v2
+  comment_monitoring_enabled: boolean;
+  private_reply_enabled: boolean;
+  public_reply_enabled: boolean;
+  private_reply_templates: string[];
+  comment_lead_keywords: string[];
+  comment_confidence_threshold: number;
+  comment_escalation_threshold: number;
+  comment_cooldown_minutes: number;
   // Timestamps
   created_at: string;
   updated_at: string;
