@@ -37,7 +37,79 @@ export interface GroqOptions {
 /**
  * Call Groq chat completions API.
  * Returns the assistant's reply text, or null on failure.
-  
-ee—U O'urn to public fallback gracefully if private reply fails
-  * 3. Always like the comment for engagement
  */
+export async function groqChat(
+  messages: ChatMessage[],
+  options: GroqOptions = {}
+): Promise<string | null> {
+  if (!GROQ_API_KEY) {
+    console.error("GROQ_API_KEY not configured");
+    return null;
+  }
+
+  const {
+    model = DEFAULT_MODEL,
+    maxTokens = 300,
+    temperature = 0.4,
+    topP = 0.9,
+    responseFormat,
+  } = options;
+
+  try {
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      max_tokens: maxTokens,
+      temperature,
+      top_p: topP,
+    };
+
+    if (responseFormat) {
+      body.response_format = responseFormat;
+    }
+
+    const response = await fetch(GROQ_BASE_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Groq API error ${response.status}:`, errorText);
+      return null;
+    }
+
+    const data: GroqResponse = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || null;
+  } catch (error) {
+    console.error("Groq API call failed:", error);
+    return null;
+  }
+}
+
+/**
+ * Call Groq with JSON mode for structured outputs.
+ * Returns parsed JSON or null on failure.
+ */
+export async function groqJson<T>(
+  messages: ChatMessage[],
+  options: Omit<GroqOptions, "responseFormat"> = {}
+): Promise<T | null> {
+  const result = await groqChat(messages, {
+    ...options,
+    responseFormat: { type: "json_object" },
+  });
+
+  if (!result) return null;
+
+  try {
+    return JSON.parse(result) as T;
+  } catch (error) {
+    console.error("Failed to parse Groq JSON response:", result, error);
+    return null;
+  }
+}
