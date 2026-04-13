@@ -27,5 +27,5 @@ export default async function SettingsPage() {
         <FaqManager entries={(faqResult.data || []) as FaqEntry[]} />
       </div>
     </div>
-  
- "
+  );
+}
