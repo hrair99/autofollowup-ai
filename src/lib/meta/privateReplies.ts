@@ -53,7 +53,7 @@ export async function sendPrivateReply(
         message: { text: message },
       },
       token,
-    });
+    }) as { message_id?: string };
 
     console.log(`[PrivateReply] Sent to comment ${commentId}: messageId=${result.message_id}`);
 
@@ -97,7 +97,7 @@ export async function hasPrivateReplyBeenSent(
     .from("comments")
     .select("private_reply_sent_at")
     .eq("comment_id", commentId)
-    .single();
+    .single() as { data: { private_reply_sent_at: string | null } | null };
 
   return !!(data?.private_reply_sent_at);
 }
