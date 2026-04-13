@@ -1,8 +1,8 @@
 import { createServerSupabase } from "@/lib/supabase/server";
-import { generateInitialOutreach } from "A/lib/ai";
+import { generateInitialOutreach } from "@/lib/ai";
 import { groqChat } from "@/lib/ai/groq-client";
 import { NextResponse } from "next/server";
-import type { Lead, Settings, Message } from "A/lib/types";
+import type { Lead, Settings, Message } from "@/lib/types";
 
 export async function POST(request: Request) {
   try {
