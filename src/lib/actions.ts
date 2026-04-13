@@ -166,10 +166,19 @@ export async function saveSettings(formData: FormData) {
     enquiry_form_url: (formData.get("enquiry_form_url") as string) || null,
     contact_email: (formData.get("contact_email") as string) || null,
     contact_phone: (formData.get("contact_phone") as string) || null,
-    // Comment automation
+    // Comment automation (legacy)
     comment_auto_reply: formData.get("comment_auto_reply") === "on",
     dm_automation_enabled: formData.get("dm_automation_enabled") === "on",
     escalation_keywords: parseArray("escalation_keywords"),
+    // Comment automation v2
+    comment_monitoring_enabled: formData.get("comment_monitoring_enabled") === "on",
+    private_reply_enabled: formData.get("private_reply_enabled") === "on",
+    public_reply_enabled: formData.get("public_reply_enabled") === "on",
+    private_reply_templates: ((formData.get("private_reply_templates") as string) || "").split("\n").map(s => s.trim()).filter(Boolean),
+    comment_lead_keywords: parseArray("comment_lead_keywords"),
+    comment_confidence_threshold: parseFloat(formData.get("comment_confidence_threshold") as string) || 0.4,
+    comment_escalation_threshold: parseFloat(formData.get("comment_escalation_threshold") as string) || 0.8,
+    comment_cooldown_minutes: parseInt(formData.get("comment_cooldown_minutes") as string) || 5,
   };
 
   const { data: existing } = await supabase
