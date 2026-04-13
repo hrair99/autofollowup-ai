@@ -164,6 +164,7 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
         });
       }
     } else if (decision.shouldUpdateLead && senderId) {
+      // Just find the existing lead and update
       const { data: existingLead } = await supabase
         .from("leads")
         .select("id")
@@ -215,6 +216,7 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
   } catch (error) {
     console.error("[CommentHandler] Error:", error);
 
+    // Log error
     await supabase.from("automation_logs").insert({
       lead_id: null,
       event_type: "error",
@@ -251,10 +253,12 @@ async function executeAction(
 ): Promise<void> {
   const { action, commentId, pageId, text, classification, settings, commentRecordId } = ctx;
 
+  // Always like the comment for engagement
   await likeComment(commentId, pageId);
 
   switch (action) {
     case "send_private_reply": {
+      // Build private reply message
       const privateMessage = buildPrivateReplyMessage({
         businessName: settings.business_name || "our team",
         enquiryFormUrl: settings.enquiry_form_url,
@@ -262,9 +266,11 @@ async function executeAction(
         customTemplate: settings.private_reply_templates?.[0] || null,
       });
 
+      // Send private reply
       const result = await sendPrivateReply(commentId, privateMessage, pageId);
 
       if (result.success) {
+        // Update comment record
         await supabase
           .from("comments")
           .update({
@@ -274,16 +280,19 @@ async function executeAction(
           })
           .eq("id", commentRecordId);
 
+        // Update lead private reply count
         if (ctx.leadId) {
-          await supabase.rpc("increment_private_reply_count", { lead_id_param: ctx.leadId }).catch(() => {
-            supabase
+          const { error: rpcError } = await supabase.rpc("increment_private_reply_count", { lead_id_param: ctx.leadId });
+          if (rpcError) {
+            // Fallback: just update directly
+            await supabase
               .from("leads")
               .update({ private_reply_count: 1 })
-              .eq("id", ctx.leadId!)
-              .then(() => {});
-          });
+              .eq("id", ctx.leadId!);
+          }
         }
 
+        // Also post a brief public reply to show engagement
         if (settings.public_reply_enabled) {
           const publicReply = getTemplateReply(classification.classification, {
             enquiryFormUrl: settings.enquiry_form_url,
@@ -291,7 +300,7 @@ async function executeAction(
             businessName: settings.business_name || undefined,
           });
 
-          const publicResult = await postPublicReply(commentId, publicReply, pageId);
+          const publicResult = await postPublicReply(commentId, publicReply), pageId);
           if (publicResult.success) {
             await supabase
               .from("comments")
@@ -303,6 +312,7 @@ async function executeAction(
           }
         }
       } else if (result.fallbackNeeded) {
+        // Private reply failed â†” fall back to public reply
         console.log(`[CommentHandler] Private reply failed, falling back to public reply`);
         await executePublicReply(supabase, ctx, commentRecordId);
       }
@@ -311,11 +321,12 @@ async function executeAction(
 
     case "public_reply_only":
     case "public_reply_and_wait": {
-      await executePublicReply(supabase, ctx, commentRecordId);
+      await executePublicReply supabase, ctx, commentRecordId);
       break;
     }
 
     case "escalate_to_human": {
+      // Update comment record
       await supabase
         .from("comments")
         .update({
@@ -325,6 +336,7 @@ async function executeAction(
         })
         .eq("id", commentRecordId);
 
+      // Mark lead for human review
       if (ctx.leadId) {
         await supabase
           .from("leads")
@@ -354,13 +366,14 @@ async function executePublicReply(
     pageId: string;
     text: string;
     classification: CommentClassificationResult;
-    settings: Settings;
+    settings: Settingsì
     commentRecordId: string;
   },
   commentRecordId: string
 ): Promise<void> {
   const { commentId, pageId, text, classification, settings } = ctx;
 
+  // Try AI-generated reply first, fall back to template
   let replyText = await generateAiPublicReply(text, {
     classification: classification.classification,
     businessName: settings.business_name || "our team",
