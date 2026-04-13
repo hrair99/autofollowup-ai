@@ -1,5 +1,5 @@
 // ============================================
-// Public Reply Service — Safe public comment replies
+// Public Reply Service â€” Safe public comment replies
 // Used as fallback when Private Reply is unavailable
 // ============================================
 
@@ -32,7 +32,7 @@ export async function postPublicReply(
       method: "POST",
       body: { message },
       token,
-    });
+    }) as { id?: string };
 
     console.log(`[PublicReply] Replied to ${commentId}: replyId=${result.id}`);
 
@@ -63,7 +63,7 @@ export async function likeComment(commentId: string, pageId?: string): Promise<b
 
     return true;
   } catch {
-    // Non-critical — don't fail on like errors
+    // Non-critical â€” don't fail on like errors
     return false;
   }
 }
@@ -75,7 +75,7 @@ export async function likeComment(commentId: string, pageId?: string): Promise<b
 const DEFAULT_TEMPLATES: Record<string, string[]> = {
   pricing_request: [
     "Thanks for your interest! Best way to get a quote is to send us a message or use our enquiry form{link_suffix}",
-    "Hey! ICing depends on the job — shoot us a DM and we'll sort you out{link_suffix}",
+    "Hey! ICing depends on the job â€” shoot us a DM and we'll sort you out{link_suffix}",
   ],
   quote_request: [
     "We'd love to help! Send us a message with your details and we'll get a quote to you{link_suffix}",
@@ -87,11 +87,11 @@ const DEFAULT_TEMPLATES: Record<string, string[]> = {
   ],
   lead_interest: [
     "Thanks for reaching out! Send us a message and we'll help you out{link_suffix}",
-    "Hey! Happy to help — shoot us a DM for more info{link_suffix}",
+    "Hey! Happy to help â€” shoot us a DM for more info{link_suffix}",
   ],
   support_request: [
     "Sorry to hear that! Send us a message with the details and we'll get someone onto it{link_suffix}",
-    "We'll get this sorted for you ℤ DM us with the details{link_suffix}",
+    "We'll get this sorted for you â„¤ DM us with the details{link_suffix}",
   ],
   default: [
     "Thanks! Send us a message and we'll help you out{link_suffix}",
@@ -101,7 +101,7 @@ const DEFAULT_TEMPLATES: Record<string, string[]> = {
 
 /**
  * Pick a template-based public reply.
- #�/
+ #•/
 ep@rt function getTemplateReply(
   classification: CommentClassification,
   options: {
