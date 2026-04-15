@@ -124,6 +124,8 @@ export async function GET(request: Request) {
     META_VERIFY_TOKEN: !!process.env.META_VERIFY_TOKEN,
     META_PAGE_TOKEN: !!process.env.META_PAGE_TOKEN,
     META_PAGE_TOKENS: !!process.env.META_PAGE_TOKENS,
+    META_APP_SECRET: !!process.env.META_APP_SECRET,
+    META_SKIP_SIGNATURE_CHECK: process.env.META_SKIP_SIGNATURE_CHECK === "true",
     GROQ_API_KEY: !!process.env.GROQ_API_KEY,
   };
 
