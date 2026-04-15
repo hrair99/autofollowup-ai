@@ -169,6 +169,13 @@ export default function SettingsForm({ settings }: { settings: Settings | null }
             <input id="stop_on_reply" name="stop_on_reply" type="checkbox" defaultChecked={settings?.stop_on_reply ?? true} className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-600" />
             <label htmlFor="stop_on_reply" className="text-sm text-gray-700">Stop follow-ups when lead replies</label>
           </div>
+          <div className="flex items-center gap-3">
+            <input id="auto_follow_up_enabled" name="auto_follow_up_enabled" type="checkbox" defaultChecked={settings?.auto_follow_up_enabled ?? true} className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-600" />
+            <label htmlFor="auto_follow_up_enabled" className="text-sm text-gray-700">
+              Auto-schedule follow-ups after every bot reply
+              <span className="block text-xs text-gray-500">Off = follow-ups only run when you press the button on a lead.</span>
+            </label>
+          </div>
         </div>
       </div>
 

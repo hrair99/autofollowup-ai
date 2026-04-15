@@ -82,6 +82,7 @@ export interface Lead {
   conversion_stage: ConversionStage;
   enquiry_link_sent_at: string | null;
   enquiry_form_completed: boolean;
+  enquiry_form_completed_at?: string | null;
   location_text: string | null;
   detected_service_type: string | null;
   detected_job_type: string | null;
@@ -148,6 +149,7 @@ export interface Settings {
   max_follow_ups: number;
   follow_up_interval_days: number;
   stop_on_reply: boolean;
+  auto_follow_up_enabled?: boolean;
   // AI config
   ai_tone: AiTone;
   ai_style_instructions: string | null;

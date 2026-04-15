@@ -147,6 +147,7 @@ export async function saveSettings(formData: FormData) {
     max_follow_ups: parseInt(formData.get("max_follow_ups") as string) || 5,
     follow_up_interval_days: parseInt(formData.get("follow_up_interval_days") as string) || 3,
     stop_on_reply: formData.get("stop_on_reply") === "on",
+    auto_follow_up_enabled: formData.get("auto_follow_up_enabled") === "on",
     // AI config
     ai_tone: (formData.get("ai_tone") as AiTone) || "friendly",
     ai_style_instructions: (formData.get("ai_style_instructions") as string) || null,
@@ -327,4 +328,65 @@ export async function signOut() {
   const supabase = createServerSupabase();
   await supabase.auth.signOut();
   revalidatePath("/");
+}
+
+// ============================================
+// markEnquiryFormCompleted
+// Toggles the `enquiry_form_completed` flag on a lead. When set to true
+// it also cancels pending follow-ups and moves the lead to `booked`.
+// The SQL trigger (migration 004) stamps `enquiry_form_completed_at`
+// automatically, so we don't touch it here.
+// ============================================
+export async function markEnquiryFormCompleted(
+  leadId: string,
+  completed: boolean
+) {
+  const supabase = createServerSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  // Prefer the SQL function which also cancels pending follow-ups
+  // atomically. Fall back to a plain update if the function isn't
+  // deployed yet (migration 004 pending).
+  const { error: rpcError } = await supabase.rpc("mark_form_completed", {
+    lead_id_param: leadId,
+    completed,
+  });
+
+  if (rpcError) {
+    const fallback = await supabase
+      .from("leads")
+      .update({
+        enquiry_form_completed: completed,
+        status: completed ? "booked" : "following_up",
+        conversion_stage: completed ? "booked" : "awaiting_form",
+      })
+      .eq("id", leadId)
+      .eq("user_id", user.id);
+    if (fallback.error) throw new Error(fallback.error.message);
+
+    if (completed) {
+      await supabase
+        .from("follow_ups")
+        .update({ status: "cancelled" })
+        .eq("lead_id", leadId)
+        .eq("status", "pending");
+    }
+  }
+
+  // Log the manual action
+  await supabase.from("automation_logs").insert({
+    lead_id: leadId,
+    event_type: "manual_form_toggle",
+    channel: "web_ui",
+    action_taken: completed ? "mark_completed" : "unmark_completed",
+    details: { by_user: user.id },
+    success: true,
+  });
+
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  revalidatePath("/dashboard");
 }

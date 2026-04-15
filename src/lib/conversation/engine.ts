@@ -11,6 +11,7 @@ import { resolveStageTransition, shouldSendEnquiryLink, stageToLeadStatus } from
 import { mergeQualificationData } from "./qualification";
 import { sendMessage, sendTypingIndicator } from "../meta/messenger";
 import { getUserProfile } from "../meta/client";
+import { scheduleNextFollowUp } from "./followUpScheduler";
 import type {
   Lead,
   Settings,
@@ -194,14 +195,26 @@ export async function handleMessengerMessage(event: NormalizedWebhookEvent): Pro
       });
     }
 
-    // 17. Log automation
+    // 17. Schedule next follow-up (replaces the old "only on button press" flow)
+    const scheduled = await scheduleNextFollowUp({
+      supabase,
+      lead: { ...lead, ...leadUpdate, conversion_stage: newStage } as Lead,
+      settings,
+      stageAfterTurn: newStage,
+      botRepliedThisTurn: true,
+    });
+
+    // 18. Log automation
     await logAutomation(supabase, lead.id, "auto_reply", "messenger", nextAction, {
       intent: classification.intent,
       stage: newStage,
       confidence: classification.confidence,
+      follow_up: scheduled,
     });
 
-    console.log(`[Engine] Replied to ${senderId} | action=${nextAction} stage=${newStage} intent=${classification.intent}`);
+    console.log(
+      `[Engine] Replied to ${senderId} | action=${nextAction} stage=${newStage} intent=${classification.intent} follow_up=${scheduled.action}:${scheduled.reason}`
+    );
   } catch (error) {
     console.error("[Engine] Error handling message:", error);
     // Don't throw — return 200 to Meta so it doesn't retry
