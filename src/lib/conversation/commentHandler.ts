@@ -12,6 +12,10 @@ import { sendPrivateReply, buildPrivateReplyMessage } from "../meta/privateRepli
 import { postPublicReply, likeComment, getTemplateReply, generateAiPublicReply } from "../meta/publicReplies";
 import { findOrCreateCommentLead, enrichLeadFromComment, hasUserReceivedPrivateReply } from "../leads/matching";
 import type { NormalizedWebhookEvent, Settings } from "../types";
+import { classifyByRules, shouldSkipAi } from "./rulesClassifier";
+import type { RuleIntentResult } from "./rulesClassifier";
+import { canSendPrivateReply } from "./privateReplyGuard";
+import { getCommentById } from "../meta/commentFetch";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<any, any, any>;
@@ -29,9 +33,37 @@ function getServiceClient(): DB {
 
 export async function handleComment(event: NormalizedWebhookEvent): Promise<void> {
   const supabase = getServiceClient();
-  const { pageId, senderId, text, commentId, postId, parentCommentId, isReply } = event;
+  // Mutable locals so we can enrich from Graph if the webhook payload is thin.
+  let { pageId, senderId, text, commentId, postId, parentCommentId, isReply } = event;
 
-  if (!commentId || !text) return;
+  if (!commentId) {
+    console.log("[CommentHandler] drop: missing_comment_id");
+    return;
+  }
+
+  // --- Fetch-full-comment fallback ---
+  // Some webhook payloads arrive without message/from — fetch from Graph.
+  let graphCanReplyPrivately: boolean | undefined;
+  if (!text || !senderId) {
+    const fetched = await getCommentById(commentId, pageId);
+    if (fetched) {
+      if (!text && fetched.message) text = fetched.message;
+      if (!senderId && fetched.from?.id) senderId = fetched.from.id;
+      graphCanReplyPrivately = fetched.can_reply_privately;
+      if (!postId && fetched.parent?.id) postId = fetched.parent.id;
+      console.log(`[CommentHandler] enriched ${commentId} from Graph`);
+    } else {
+      console.log(`[CommentHandler] drop: graph_fetch_failed ${commentId}`);
+      await logDrop(supabase, commentId, "graph_fetch_failed", event);
+      return;
+    }
+  }
+
+  if (!text) {
+    console.log(`[CommentHandler] drop: no_text_after_enrichment ${commentId}`);
+    await logDrop(supabase, commentId, "no_text_after_enrichment", event);
+    return;
+  }
 
   console.log(`[CommentHandler] Comment on page ${pageId}, post ${postId}, from ${senderId}: "${text.substring(0, 80)}"`);
 
@@ -61,13 +93,22 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
       return;
     }
 
-    // --- 2. Quick lead signal check (fast filter) ---
+    // --- 2a. Rules-first classification (deterministic, cheap) ---
+    const rule: RuleIntentResult = classifyByRules(text);
+    console.log(
+      `[CommentHandler] Rules: intent=${rule.intent} urgency=${rule.urgency} conf=${rule.confidence.toFixed(2)} spam=${rule.isSpam}`
+    );
+
+    // --- 2b. Quick lead signal check (fast filter) ---
     const quickCheck = quickLeadSignalCheck(text, settings.comment_lead_keywords);
 
     // --- 3. Full classification ---
-    const classification = await classifyComment(text, {
-      skipAi: !quickCheck && text.length < 5, // Skip AI for very short non-matching comments
-    });
+    // Skip AI if rules are confident OR the text is tiny and non-matching.
+    const classification = shouldSkipAi(rule)
+      ? await classifyComment(text, { skipAi: true })
+      : await classifyComment(text, {
+          skipAi: !quickCheck && text.length < 5,
+        });
 
     console.log(`[CommentHandler] Classification: ${classification.classification} (${classification.confidence.toFixed(2)}) method=${classification.method}`);
 
@@ -94,6 +135,41 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
     });
 
     console.log(`[CommentHandler] Decision: ${decision.action} | ${decision.reasoning}`);
+
+    // --- 5b. Preflight guard — authoritative "can we DM?" check ---
+    const guard = canSendPrivateReply({
+      comment: {
+        id: commentId,
+        text,
+        senderId: senderId || null,
+        pageId,
+        createdAtMs: event.timestamp || Date.now(),
+        canReplyPrivately: graphCanReplyPrivately,
+      },
+      settings,
+      leadHistory: {
+        sent: userReplyHistory.sent,
+        lastSentAt: userReplyHistory.lastSentAt,
+        commentCount: userReplyHistory.commentCount,
+        actionsOnThisComment: 0,
+      },
+      rule,
+    });
+    console.log(
+      `[CommentHandler] Guard: allowed=${guard.allowed} reason=${guard.reason} action=${guard.action}`
+    );
+
+    // If the guard overrides the decision, use guard's action.
+    const finalAction = guard.allowed ? decision.action : guard.action;
+    const decisionTrace = {
+      rule,
+      guard,
+      classification_method: classification.method,
+      classification_confidence: classification.confidence,
+      decision_reasoning: decision.reasoning,
+      original_decision: decision.action,
+      final_action: finalAction,
+    };
 
     // --- 6. Find/create user ID for DB storage ---
     const userId = await getAssignedUserId(supabase);
@@ -180,9 +256,9 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
       }
     }
 
-    // --- 9. Execute the decided action ---
+    // --- 9. Execute the final action (guard may have overridden decision) ---
     await executeAction(supabase, {
-      action: decision.action,
+      action: finalAction,
       commentId,
       postId: postId || "",
       pageId,
@@ -194,12 +270,12 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
       commentRecordId: commentRecord.id,
     });
 
-    // --- 10. Log automation ---
+    // --- 10. Log automation (with full decision trace) ---
     await supabase.from("automation_logs").insert({
       lead_id: leadId,
       event_type: "comment_automation",
       channel: "facebook_comment",
-      action_taken: decision.action,
+      action_taken: finalAction,
       details: {
         comment_id: commentId,
         post_id: postId,
@@ -208,11 +284,16 @@ export async function handleComment(event: NormalizedWebhookEvent): Promise<void
         method: classification.method,
         reasoning: decision.reasoning,
         priority: decision.priority,
+        guard_reason: guard.reason,
       },
+      decision_trace: decisionTrace,
+      drop_reason: guard.allowed ? null : guard.reason,
+      rule_intent: rule.intent,
+      rule_confidence: rule.confidence,
       success: true,
     });
 
-    console.log(`[CommentHandler] Complete: action=${decision.action} lead=${leadId || "none"} classification=${classification.classification}`);
+    console.log(`[CommentHandler] Complete: action=${finalAction} lead=${leadId || "none"} classification=${classification.classification} guard=${guard.reason}`);
   } catch (error) {
     console.error("[CommentHandler] Error:", error);
 
@@ -477,4 +558,32 @@ async function loadSettings(supabase: DB): Promise<Settings | null> {
 async function getAssignedUserId(supabase: DB): Promise<string | null> {
   const { data: users } = await supabase.auth.admin.listUsers();
   return users?.users?.[0]?.id || null;
+}
+
+// ============================================
+// Drop logger — any time we bail out early, record *why*.
+// ============================================
+async function logDrop(
+  supabase: DB,
+  commentId: string,
+  reason: string,
+  event: NormalizedWebhookEvent
+): Promise<void> {
+  try {
+    await supabase.from("automation_logs").insert({
+      lead_id: null,
+      event_type: "comment_dropped",
+      channel: "facebook_comment",
+      action_taken: "drop",
+      details: {
+        comment_id: commentId,
+        page_id: event.pageId,
+        sender_id: event.senderId || null,
+      },
+      drop_reason: reason,
+      success: false,
+    });
+  } catch {
+    // non-critical
+  }
 }
