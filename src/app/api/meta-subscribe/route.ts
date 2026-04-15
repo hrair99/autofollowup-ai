@@ -47,6 +47,18 @@ async function graphPost(path: string, body: Record<string, unknown>, token: str
   return { ok: r.ok, status: r.status, data };
 }
 
+// Resolve Page ID without needing pages_read_engagement.
+// Prefers META_PAGE_ID env var; falls back to debug_token inspection.
+async function resolvePageId(token: string): Promise<string | null> {
+  if (process.env.META_PAGE_ID) return process.env.META_PAGE_ID;
+  const inspect = await graphGet(
+    `/debug_token?input_token=${encodeURIComponent(token)}`,
+    token
+  );
+  const id = inspect.data?.data?.profile_id || inspect.data?.data?.user_id;
+  return id ? String(id) : null;
+}
+
 // GET — view current page info + existing subscriptions
 export async function GET(request: Request) {
   if (!auth(request)) {
@@ -55,20 +67,18 @@ export async function GET(request: Request) {
 
   try {
     const token = getToken();
-
-    const me = await graphGet("/me?fields=id,name,category", token);
-    if (!me.ok) {
+    const pageId = await resolvePageId(token);
+    if (!pageId) {
       return NextResponse.json(
-        { error: "Failed to identify page — token may be expired", detail: me.data },
+        { error: "Could not resolve page ID. Set META_PAGE_ID env var." },
         { status: 502 }
       );
     }
 
-    const pageId = me.data.id;
     const subs = await graphGet(`/${pageId}/subscribed_apps`, token);
 
     return NextResponse.json({
-      page: me.data,
+      page: { id: pageId },
       subscribed_apps: subs.data,
       required_fields: SUBSCRIBED_FIELDS,
     });
@@ -85,16 +95,13 @@ export async function POST(request: Request) {
 
   try {
     const token = getToken();
-
-    const me = await graphGet("/me?fields=id,name", token);
-    if (!me.ok) {
+    const pageId = await resolvePageId(token);
+    if (!pageId) {
       return NextResponse.json(
-        { error: "Token cannot identify page", detail: me.data },
+        { error: "Could not resolve page ID. Set META_PAGE_ID env var." },
         { status: 502 }
       );
     }
-
-    const pageId = me.data.id;
 
     const subscribe = await graphPost(
       `/${pageId}/subscribed_apps`,
@@ -105,7 +112,7 @@ export async function POST(request: Request) {
     const after = await graphGet(`/${pageId}/subscribed_apps`, token);
 
     return NextResponse.json({
-      page: me.data,
+      page: { id: pageId },
       subscribe_result: subscribe.data,
       subscribe_status: subscribe.status,
       after: after.data,
