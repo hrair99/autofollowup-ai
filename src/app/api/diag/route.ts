@@ -47,8 +47,10 @@ async function checkMetaToken(): Promise<CheckResult> {
   const token = process.env.META_PAGE_TOKEN;
   if (!token) return { ok: false, detail: "META_PAGE_TOKEN not set" };
   try {
+    // Use /me/subscribed_apps — works with pages_manage_metadata (Messenger scope),
+    // unlike /me which newly requires pages_read_engagement.
     const { result: r, ms } = await timed(async () =>
-      fetch(`https://graph.facebook.com/v25.0/me?access_token=${token}`)
+      fetch(`https://graph.facebook.com/v25.0/me/subscribed_apps?access_token=${token}`)
     );
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
@@ -58,9 +60,10 @@ async function checkMetaToken(): Promise<CheckResult> {
         ms,
       };
     }
+    const apps = Array.isArray(data.data) ? data.data : [];
     return {
       ok: true,
-      detail: `Page: ${data.name || "?"} (id=${data.id || "?"})`,
+      detail: `Page token valid; ${apps.length} subscribed app(s)`,
       ms,
     };
   } catch (e) {
