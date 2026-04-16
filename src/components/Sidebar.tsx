@@ -10,11 +10,13 @@ import {
   LogOut,
   Zap,
   Bot,
+  Link2,
 } from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Leads", href: "/leads", icon: Users },
+  { name: "Connect Page", href: "/connect", icon: Link2 },
   { name: "Test Bot", href: "/test", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
