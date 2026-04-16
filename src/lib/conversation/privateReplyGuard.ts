@@ -157,13 +157,4 @@ export function canSendPrivateReply(input: GuardInput): GuardResult {
 function deny(
   reason: string,
   action: GuardAction,
-  trace: Record<string, unknown>
-): GuardResult {
-  return {
-    allowed: false,
-    action,
-    reason,
-    fallbackAction: "public_reply_only",
-    trace,
-  };
-}
+  tra

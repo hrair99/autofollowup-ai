@@ -209,8 +209,4 @@ export function classifyByRules(text: string): RuleIntentResult {
 
 /**
  * Should we skip the AI call and trust rules?
- * Threshold is intentionally generous — rules are meant to be the fast path.
- */
-export function shouldSkipAi(result: RuleIntentResult): boolean {
-  return result.confidence >= 0.7 || result.isSpam || result.intent === "low_signal";
-}
+ * Threshold is intentional

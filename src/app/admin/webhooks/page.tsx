@@ -223,17 +223,4 @@ function Table({ columns, rows }: { columns: string[]; rows: string[][] }) {
                   style={{
                     border: "1px solid #eee",
                     verticalAlign: "top",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                  }}
-                >
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))
-        )}
-      </tbody>
-    </table>
-  );
-}
+                    whiteSpace: "pre-wrap",

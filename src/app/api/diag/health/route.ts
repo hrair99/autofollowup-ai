@@ -142,9 +142,4 @@ async function checkToken(): Promise<{ ok: boolean; detail?: string }> {
       `https://graph.facebook.com/v25.0/me?access_token=${token}`
     );
     if (!res.ok) return { ok: false, detail: `http_${res.status}` };
-    const j = (await res.json()) as { id?: string; name?: string };
-    return { ok: true, detail: `${j.name || "?"}:${j.id || "?"}` };
-  } catch (e) {
-    return { ok: false, detail: String(e) };
-  }
-}
+    const j = (await res.json()) as { id?: string; name?: s

@@ -91,10 +91,4 @@ begin
       and next_run_at <= now()
       and attempts < max_attempts
       and (p_types is null or type = any(p_types))
-    order by next_run_at asc
-    for update skip locked
-    limit 1
-  )
-  returning *;
-end;
-$$;
+   

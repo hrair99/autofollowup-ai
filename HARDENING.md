@@ -136,6 +136,4 @@ Run down this list if a comment doesn't result in a DM:
 * `comments` table has a unique index on `comment_id` (the existing dedupe
   check relies on it).
 * `settings` is a single-row table keyed by user; `loadSettings` returns
-  the first user's row (existing behaviour, unchanged).
-* `classify_next_job` RPC uses `gen_random_uuid()` — `pgcrypto` extension
-  must be enabled. On Supabase it is by default.
+  the first user's row (existing behaviour,

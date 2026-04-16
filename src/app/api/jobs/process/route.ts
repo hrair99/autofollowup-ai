@@ -80,8 +80,4 @@ export async function GET(req: NextRequest) {
   }
   return POST(
     new NextRequest(req.url, {
-      method: "POST",
-      headers: { authorization: `Bearer ${secret || ""}` },
-    })
-  );
-}
+      method: 

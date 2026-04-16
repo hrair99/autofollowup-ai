@@ -168,11 +168,4 @@ export async function failJob(
       next_run_at: nextRun,
       updated_at: new Date().toISOString(),
       lock_token: null,
-      locked_at: null,
-    })
-    .eq("id", id);
-}
-
-export function commentDedupeKey(pageId: string, commentId: string): string {
-  return `comment:${pageId}:${commentId}`;
-}
+     

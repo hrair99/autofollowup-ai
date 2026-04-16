@@ -108,7 +108,4 @@ export async function updateDeliveryStatus(
       })
       .eq("request_id", requestId);
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error("[Webhook] Failed to update delivery log:", e);
-  }
-}
+    /
