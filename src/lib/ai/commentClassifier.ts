@@ -286,7 +286,21 @@ function classifyByRules(text: string): RuleMatch | null {
 // AI classification (for ambiguous comments)
 // ============================================
 
-const COMMENT_CLASSIFICATION_PROMPT = `You are a comment classifier for an HVAC/air conditioning service business Facebook page.
+function buildClassificationPrompt(businessContext?: {
+  businessName?: string;
+  businessDescription?: string;
+  serviceType?: string;
+  serviceCategories?: string[];
+}): string {
+  const bizDesc = businessContext?.businessDescription
+    || businessContext?.serviceType
+    || "a service business";
+  const bizName = businessContext?.businessName || "the business";
+  const categories = businessContext?.serviceCategories?.length
+    ? `\nServices offered: ${businessContext.serviceCategories.join(", ")}`
+    : "";
+
+  return `You are a comment classifier for ${bizName} (${bizDesc}) Facebook page.${categories}
 
 Analyze the comment and return a JSON object:
 
@@ -311,10 +325,11 @@ Classification guide:
 - "non_lead": social engagement only (likes, tags, reactions, general chat)
 - "unclear": can't determine intent confidently
 
-Lead signals include any comment suggesting the person might want air conditioning services.
+Lead signals include any comment suggesting the person might want the services this business offers.
 Non-leads include: emoji-only reactions, tagging friends, general praise without service interest, unrelated discussion.
 
 Return ONLY valid JSON.`;
+}
 
 interface AiCommentResult {
   classification: CommentClassification;
@@ -326,14 +341,25 @@ interface AiCommentResult {
   reasoning: string;
 }
 
-async function classifyByAi(text: string, postContext?: string): Promise<AiCommentResult | null> {
+async function classifyByAi(
+  text: string,
+  postContext?: string,
+  businessContext?: {
+    businessName?: string;
+    businessDescription?: string;
+    serviceType?: string;
+    serviceCategories?: string[];
+  }
+): Promise<AiCommentResult | null> {
   const userPrompt = postContext
     ? `Post context: "${postContext}"\n\nComment to classify: "${text}"`
     : `Comment to classify: "${text}"`;
 
+  const systemPrompt = buildClassificationPrompt(businessContext);
+
   const result = await groqJson<AiCommentResult>(
     [
-      { role: "system", content: COMMENT_CLASSIFICATION_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
     { maxTokens: 200, temperature: 0.1 }
@@ -351,6 +377,12 @@ export async function classifyComment(
   options?: {
     postContext?: string;
     skipAi?: boolean;
+    businessContext?: {
+      businessName?: string;
+      businessDescription?: string;
+      serviceType?: string;
+      serviceCategories?: string[];
+    };
   }
 ): Promise<CommentClassificationResult> {
   const entities = extractEntities(commentText);
@@ -375,7 +407,7 @@ export async function classifyComment(
 
   // Step 2: If rules gave a weak match or nothing, try AI
   if (!options?.skipAi) {
-    const aiResult = await classifyByAi(commentText, options?.postContext);
+    const aiResult = await classifyByAi(commentText, options?.postContext, options?.businessContext);
 
     if (aiResult && aiResult.confidence > 0) {
       // If we had a weak rule match, use the higher-confidence one

@@ -94,8 +94,10 @@ export async function handleComment(
       return;
     }
 
-    // --- 1. Load settings ---
-    const settings = await loadSettings(supabase);
+    // --- 1. Load settings (business-scoped) ---
+    const settings = businessId
+      ? ((await loadBusinessSettings(businessId)) as unknown as Settings)
+      : await loadSettings(supabase);
     if (!settings) {
       console.error("[CommentHandler] No settings found");
       return;
@@ -117,11 +119,20 @@ export async function handleComment(
     const quickCheck = quickLeadSignalCheck(text, settings.comment_lead_keywords);
 
     // --- 3. Full classification ---
+    // Build business context for AI classification
+    const bizClassCtx = settings ? {
+      businessName: settings.business_name || bizCtx?.businessName || undefined,
+      businessDescription: settings.business_description || undefined,
+      serviceType: settings.service_type || undefined,
+      serviceCategories: settings.service_categories || undefined,
+    } : undefined;
+
     // Skip AI if rules are confident OR the text is tiny and non-matching.
     const classification = shouldSkipAi(rule)
-      ? await classifyComment(text, { skipAi: true })
+      ? await classifyComment(text, { skipAi: true, businessContext: bizClassCtx })
       : await classifyComment(text, {
           skipAi: !quickCheck && text.length < 5,
+          businessContext: bizClassCtx,
         });
 
     console.log(`[CommentHandler] Classification: ${classification.classification} (${classification.confidence.toFixed(2)}) method=${classification.method}`);
@@ -186,7 +197,9 @@ export async function handleComment(
     };
 
     // --- 6. Find/create user ID for DB storage ---
-    const userId = await getAssignedUserId(supabase);
+    const userId = businessId
+      ? await getBusinessOwnerId(supabase, businessId)
+      : await getAssignedUserId(supabase);
     if (!userId) {
       console.error("[CommentHandler] No user to assign to");
       return;
@@ -195,6 +208,7 @@ export async function handleComment(
     // --- 7. Store the comment record ---
     const commentRecord = await storeComment(supabase, {
       userId,
+      businessId,
       pageId,
       postId: postId || "",
       commentId,
@@ -218,6 +232,7 @@ export async function handleComment(
         commentId,
         commenterPlatformId: senderId,
         source: "facebook_comment",
+        businessId,
       });
 
       if (leadResult) {
@@ -282,11 +297,13 @@ export async function handleComment(
       settings,
       leadId,
       commentRecordId: commentRecord.id,
+      pageToken: bizCtx?.pageToken,
     });
 
     // --- 10. Log automation (with full decision trace) ---
     await supabase.from("automation_logs").insert({
       lead_id: leadId,
+      business_id: businessId,
       event_type: "comment_automation",
       channel: "facebook_comment",
       action_taken: finalAction,
@@ -314,6 +331,7 @@ export async function handleComment(
     // Log error
     await supabase.from("automation_logs").insert({
       lead_id: null,
+      business_id: businessId,
       event_type: "error",
       channel: "facebook_comment",
       action_taken: "failed",
@@ -344,12 +362,13 @@ async function executeAction(
     settings: Settings;
     leadId: string | null;
     commentRecordId: string;
+    pageToken?: string;
   }
 ): Promise<void> {
-  const { action, commentId, pageId, text, classification, settings, commentRecordId } = ctx;
+  const { action, commentId, pageId, text, classification, settings, commentRecordId, pageToken } = ctx;
 
   // Always like the comment for engagement
-  await likeComment(commentId, pageId);
+  await likeComment(commentId, pageId, pageToken);
 
   switch (action) {
     case "send_private_reply": {
@@ -362,7 +381,7 @@ async function executeAction(
       });
 
       // Send private reply
-      const result = await sendPrivateReply(commentId, privateMessage, pageId);
+      const result = await sendPrivateReply(commentId, privateMessage, pageId, pageToken);
 
       if (result.success) {
         // Update comment record
@@ -395,7 +414,7 @@ async function executeAction(
             businessName: settings.business_name || undefined,
           });
 
-          const publicResult = await postPublicReply(commentId, publicReply, pageId);
+          const publicResult = await postPublicReply(commentId, publicReply, pageId, pageToken);
           if (publicResult.success) {
             await supabase
               .from("comments")
@@ -463,10 +482,11 @@ async function executePublicReply(
     classification: CommentClassificationResult;
     settings: Settings;
     commentRecordId: string;
+    pageToken?: string;
   },
   commentRecordId: string
 ): Promise<void> {
-  const { commentId, pageId, text, classification, settings } = ctx;
+  const { commentId, pageId, text, classification, settings, pageToken } = ctx;
 
   // Try AI-generated reply first, fall back to template
   let replyText = await generateAiPublicReply(text, {
@@ -474,6 +494,10 @@ async function executePublicReply(
     businessName: settings.business_name || "our team",
     enquiryFormUrl: settings.enquiry_form_url,
     tone: settings.ai_tone,
+    serviceType: classification.service_type || settings.service_type || undefined,
+    serviceAreas: settings.service_areas,
+    location: classification.location || undefined,
+    urgency: classification.urgency || undefined,
   });
 
   if (!replyText) {
@@ -484,7 +508,7 @@ async function executePublicReply(
     });
   }
 
-  const result = await postPublicReply(commentId, replyText, pageId);
+  const result = await postPublicReply(commentId, replyText, pageId, pageToken);
 
   await supabase
     .from("comments")
@@ -504,6 +528,7 @@ async function storeComment(
   supabase: DB,
   data: {
     userId: string;
+    businessId: string | null;
     pageId: string;
     postId: string;
     commentId: string;
@@ -521,6 +546,7 @@ async function storeComment(
     .from("comments")
     .insert({
       user_id: data.userId,
+      business_id: data.businessId,
       page_id: data.pageId,
       post_id: data.postId,
       comment_id: data.commentId,
@@ -572,6 +598,17 @@ async function loadSettings(supabase: DB): Promise<Settings | null> {
 async function getAssignedUserId(supabase: DB): Promise<string | null> {
   const { data: users } = await supabase.auth.admin.listUsers();
   return users?.users?.[0]?.id || null;
+}
+
+async function getBusinessOwnerId(supabase: DB, businessId: string): Promise<string | null> {
+  const { data: biz } = await supabase
+    .from("businesses")
+    .select("owner_id")
+    .eq("id", businessId)
+    .single();
+  if (biz?.owner_id) return biz.owner_id;
+  // Fallback
+  return getAssignedUserId(supabase);
 }
 
 // ============================================

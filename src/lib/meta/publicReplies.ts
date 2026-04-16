@@ -1,6 +1,6 @@
 // ============================================
-// Public Reply Service — Safe public comment replies
-// Used as fallback when Private Reply is unavailable
+// Public Reply Service — Smart public comment replies
+// AI-generated with business context and Australian tone
 // ============================================
 
 import { graphApi, getPageToken } from "./client";
@@ -20,10 +20,11 @@ export interface PublicReplyResult {
 export async function postPublicReply(
   commentId: string,
   message: string,
-  pageId?: string
+  pageId?: string,
+  explicitToken?: string
 ): Promise<PublicReplyResult> {
   try {
-    const token = getPageToken(pageId);
+    const token = explicitToken || getPageToken(pageId);
     if (!token) {
       return { success: false, commentId: null, error: "No page token" };
     }
@@ -51,9 +52,13 @@ export async function postPublicReply(
 /**
  * Like a comment for engagement tracking.
  */
-export async function likeComment(commentId: string, pageId?: string): Promise<boolean> {
+export async function likeComment(
+  commentId: string,
+  pageId?: string,
+  explicitToken?: string
+): Promise<boolean> {
   try {
-    const token = getPageToken(pageId);
+    const token = explicitToken || getPageToken(pageId);
     if (!token) return false;
 
     await graphApi(`/${commentId}/likes`, {
@@ -69,33 +74,42 @@ export async function likeComment(commentId: string, pageId?: string): Promise<b
 }
 
 // ============================================
-// Template-based replies
+// Template-based replies (Australian tone)
 // ============================================
 
 const DEFAULT_TEMPLATES: Record<string, string[]> = {
   pricing_request: [
-    "Thanks for your interest! Best way to get a quote is to send us a message or use our enquiry form{link_suffix}",
-    "Hey! Pricing depends on the job — shoot us a DM and we'll sort you out{link_suffix}",
+    "Hey! Pricing depends on the job — flick us a DM with the details and we'll sort you out{link_suffix}",
+    "Yep, happy to help with pricing! Best bet is to message us directly so we can give you an accurate quote{link_suffix}",
+    "Thanks for reaching out! Drop us a message with what you need and we'll get a quote sorted for you{link_suffix}",
   ],
   quote_request: [
-    "We'd love to help! Send us a message with your details and we'll get a quote to you{link_suffix}",
-    "Thanks! Pop your details through here and we'll get back to you ASAP{link_suffix}",
+    "We'd love to help! Shoot us a DM with your details and we'll get a quote to you ASAP{link_suffix}",
+    "No worries! Pop your details through and we'll get back to you with a quote{link_suffix}",
+    "Yep, happy to quote on that! Send us a message with the details{link_suffix}",
   ],
   booking_request: [
-    "Awesome! Send us a message or book in through our form and we'll get it sorted{link_suffix}",
-    "Thanks! Flick us a DM or use our online booking form{link_suffix}",
+    "Awesome! Flick us a message or book in through our form and we'll get it sorted{link_suffix}",
+    "No dramas! Send us a DM or use our booking form and we'll lock in a time{link_suffix}",
+    "Sounds good! Drop us a message and we'll get you booked in{link_suffix}",
   ],
   lead_interest: [
-    "Thanks for reaching out! Send us a message and we'll help you out{link_suffix}",
-    "Hey! Happy to help — shoot us a DM for more info{link_suffix}",
+    "Thanks for reaching out! Shoot us a DM and we'll help you out{link_suffix}",
+    "Yep, we can definitely help with that! Send us a message for more info{link_suffix}",
+    "No worries! Flick us a DM and we'll sort you out{link_suffix}",
   ],
   support_request: [
-    "Sorry to hear that! Send us a message with the details and we'll get someone onto it{link_suffix}",
-    "We'll get this sorted for you — DM us with the details{link_suffix}",
+    "Sorry to hear that! Send us a message with the details and we'll get someone onto it for you{link_suffix}",
+    "No worries, we'll get this sorted! DM us with the details and we'll organise a time{link_suffix}",
+    "Thanks for letting us know — drop us a message and we'll take care of it{link_suffix}",
+  ],
+  complaint: [
+    "Sorry to hear that — we take this seriously. Please send us a DM with the details so we can look into it{link_suffix}",
+    "That's not the experience we want our customers to have. Please message us directly so we can make it right{link_suffix}",
   ],
   default: [
     "Thanks! Send us a message and we'll help you out{link_suffix}",
-    "Hey! Flick us a DM and we'll chat{link_suffix}",
+    "Yep! Flick us a DM and we'll chat{link_suffix}",
   ],
 };
 
@@ -132,7 +146,8 @@ export function getTemplateReply(
 }
 
 /**
- * Generate an AI-powered public reply (for higher quality responses).
+ * Generate an AI-powered public reply with full business context.
+ * Uses the business's configured tone, service info, and extracted entities.
  */
 export async function generateAiPublicReply(
   commentText: string,
@@ -141,33 +156,73 @@ export async function generateAiPublicReply(
     businessName: string;
     enquiryFormUrl?: string | null;
     tone?: string;
+    serviceType?: string;
+    serviceAreas?: string[];
+    location?: string;
+    urgency?: string;
   }
 ): Promise<string | null> {
-  const { classification, businessName, enquiryFormUrl, tone } = options;
-  const voiceTone = tone || "friendly";
+  const {
+    classification,
+    businessName,
+    enquiryFormUrl,
+    tone,
+    serviceType,
+    serviceAreas,
+    location,
+    urgency,
+  } = options;
 
-  const systemPrompt = `You are a ${voiceTone} social media assistant for ${businessName} (HVAC/air conditioning company).
-Write a short public reply to a Facebook comment from a potential customer.
+  const voiceTone = tone || "friendly Australian";
 
-Rules:
-- 1-2 sentences MAX
-- Be ${voiceTone} and natural
-- Encourage them to send a DM or use the enquiry form
-- Do NOT include hashtags
-- Do NOT include emojis
-- Do NOT mention competitor names
-- Do NOT make specific promises about pricing or availability
-${enquiryFormUrl ? `- If appropriate, include this enquiry form link: ${enquiryFormUrl}` : "- Direct them to send the page a message"}
+  // Build context about what we know
+  const contextParts: string[] = [];
+  if (serviceType) contextParts.push(`They're asking about: ${serviceType}`);
+  if (location) contextParts.push(`Location mentioned: ${location}`);
+  if (urgency === "high" || urgency === "emergency") {
+    contextParts.push("This seems urgent — acknowledge that");
+  }
+  if (serviceAreas?.length) {
+    contextParts.push(`We service: ${serviceAreas.join(", ")}`);
+  }
+  const contextBlock = contextParts.length > 0
+    ? `\nContext:\n${contextParts.map((c) => `- ${c}`).join("\n")}\n`
+    : "";
 
-The comment was classified as: ${classification}`;
+  const systemPrompt = `You are a ${voiceTone} social media assistant for ${businessName}.
+Write a short, natural public reply to a Facebook comment.
+
+VOICE & TONE:
+- Australian casual-professional: "Yep", "No worries", "Flick us a message", "We'll sort you out"
+- Warm and helpful but not over-the-top
+- Sound like a real person, not a robot
+- Never use hashtags or emojis
+- Keep it to 1-2 sentences maximum
+
+RULES:
+- Acknowledge what they said specifically (don't be generic)
+- Direct them to DM the page or use the enquiry form
+- Do NOT promise specific pricing, availability, or timelines
+- Do NOT mention competitors
+- If the comment mentions a specific service or location, reference it naturally
+- If it's urgent, acknowledge the urgency
+${enquiryFormUrl ? `- Include this link if natural to do so: ${enquiryFormUrl}` : "- Direct them to send the page a message"}
+
+The comment was classified as: ${classification}
+${contextBlock}`;
 
   const reply = await groqChat(
     [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `Comment: "${commentText}"\n\nPublic reply:` },
+      { role: "user", content: `Comment: "${commentText}"\n\nYour reply (1-2 sentences, natural tone):` },
     ],
-    { maxTokens: 80, temperature: 0.7 }
+    { maxTokens: 100, temperature: 0.7 }
   );
+
+  // Clean up any quotes the AI might have wrapped the reply in
+  if (reply) {
+    return reply.replace(/^["']|["']$/g, "").trim();
+  }
 
   return reply;
 }

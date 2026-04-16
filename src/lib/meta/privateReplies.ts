@@ -31,10 +31,11 @@ export interface PrivateReplyResult {
 export async function sendPrivateReply(
   commentId: string,
   message: string,
-  pageId?: string
+  pageId?: string,
+  explicitToken?: string
 ): Promise<PrivateReplyResult> {
   try {
-    const token = getPageToken(pageId);
+    const token = explicitToken || getPageToken(pageId);
     if (!token) {
       console.error("[PrivateReply] No page token available");
       return {
