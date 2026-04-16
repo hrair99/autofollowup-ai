@@ -1,6 +1,11 @@
 // ============================================
 // Comment Decision Engine
-// Determines what action to take for each classified comment
+// Determines what action to take for each classified comment.
+//
+// Confidence Tiers:
+//   > highThreshold (0.85): Full auto — reply + DM
+//   > safeThreshold (0.60): Safe auto — reply + DM (conservative templates)
+//   < safeThreshold:        No reply — create lead + alert only
 // ============================================
 
 import type { CommentClassificationResult } from "../ai/commentClassifier";
@@ -13,8 +18,11 @@ export type CommentAction =
   | "send_private_reply"
   | "public_reply_only"
   | "public_reply_and_wait"
+  | "create_lead_only"
   | "ignore"
   | "escalate_to_human";
+
+export type ConfidenceTier = "high" | "safe" | "low";
 
 export interface CommentDecisionContext {
   classification: CommentClassificationResult;
@@ -26,15 +34,20 @@ export interface CommentDecisionContext {
   // Settings
   privateReplyEnabled: boolean;
   publicReplyEnabled: boolean;
-  confidenceThreshold: number;       // Minimum confidence to act (default 0.4)
+  confidenceThreshold: number;       // Minimum confidence to act (default 0.4, legacy)
   escalationThreshold: number;       // Confidence for complaints that need escalation
   commentCooldownMinutes: number;    // Min time between replies to same user
+  // Confidence tier thresholds (new)
+  confidenceHighThreshold?: number;  // Default 0.85 — full auto
+  confidenceSafeThreshold?: number;  // Default 0.60 — safe auto
   // Timing
   lastReplyToUserAt: string | null;  // ISO timestamp
   commentAge: number;                // Minutes since comment was posted
   // Comment metadata
   isReply: boolean;                  // Is this a reply to another comment?
   isFromPage: boolean;               // Is this from the page itself?
+  // Mode
+  mode?: "monitor" | "active";       // Business mode
 }
 
 export interface CommentDecision {
@@ -43,6 +56,22 @@ export interface CommentDecision {
   shouldCreateLead: boolean;
   shouldUpdateLead: boolean;
   priority: "high" | "medium" | "low" | "skip";
+  confidenceTier: ConfidenceTier;
+  needsManualReview?: boolean;
+}
+
+// ============================================
+// Confidence Tier Helper
+// ============================================
+
+function getConfidenceTier(
+  confidence: number,
+  highThreshold: number,
+  safeThreshold: number
+): ConfidenceTier {
+  if (confidence >= highThreshold) return "high";
+  if (confidence >= safeThreshold) return "safe";
+  return "low";
 }
 
 // ============================================
@@ -51,6 +80,22 @@ export interface CommentDecision {
 
 export function decideCommentAction(ctx: CommentDecisionContext): CommentDecision {
   const { classification, isFromPage, isReply } = ctx;
+  const highThreshold = ctx.confidenceHighThreshold ?? 0.85;
+  const safeThreshold = ctx.confidenceSafeThreshold ?? 0.60;
+  const tier = getConfidenceTier(classification.confidence, highThreshold, safeThreshold);
+
+  // --- Monitor mode: never take automated action ---
+  if (ctx.mode === "monitor") {
+    return {
+      action: "create_lead_only",
+      reasoning: "Business is in monitor mode — logging only, no automated replies",
+      shouldCreateLead: classification.is_lead_signal && !ctx.hasExistingLead,
+      shouldUpdateLead: ctx.hasExistingLead,
+      priority: "low",
+      confidenceTier: tier,
+      needsManualReview: true,
+    };
+  }
 
   // --- Skip: page's own comments ---
   if (isFromPage) {
@@ -60,6 +105,7 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
       shouldCreateLead: false,
       shouldUpdateLead: false,
       priority: "skip",
+      confidenceTier: tier,
     };
   }
 
@@ -71,6 +117,7 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
       shouldCreateLead: false,
       shouldUpdateLead: false,
       priority: "skip",
+      confidenceTier: tier,
     };
   }
 
@@ -82,6 +129,7 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
       shouldCreateLead: false,
       shouldUpdateLead: false,
       priority: "skip",
+      confidenceTier: tier,
     };
   }
 
@@ -93,17 +141,8 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
       shouldCreateLead: false,
       shouldUpdateLead: ctx.hasExistingLead,
       priority: "high",
-    };
-  }
-
-  // --- Skip: below confidence threshold ---
-  if (classification.confidence < ctx.confidenceThreshold) {
-    return {
-      action: "ignore",
-      reasoning: `Confidence ${classification.confidence.toFixed(2)} below threshold ${ctx.confidenceThreshold}`,
-      shouldCreateLead: false,
-      shouldUpdateLead: false,
-      priority: "skip",
+      confidenceTier: tier,
+      needsManualReview: true,
     };
   }
 
@@ -118,6 +157,7 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
         shouldCreateLead: false,
         shouldUpdateLead: ctx.hasExistingLead,
         priority: "skip",
+        confidenceTier: tier,
       };
     }
   }
@@ -131,21 +171,21 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
         shouldCreateLead: false,
         shouldUpdateLead: false,
         priority: "skip",
+        confidenceTier: tier,
       };
     }
-    // Still a lead signal but too old for private reply
     return {
-      action: ctx.publicReplyEnabled ? "public_reply_only" : "ignore",
+      action: ctx.publicReplyEnabled ? "public_reply_only" : "create_lead_only",
       reasoning: "Lead signal but comment too old for private reply",
       shouldCreateLead: !ctx.hasExistingLead,
       shouldUpdateLead: ctx.hasExistingLead,
       priority: "low",
+      confidenceTier: tier,
     };
   }
 
   // --- Not a lead signal ---
   if (!classification.is_lead_signal) {
-    // Reply to comment threads if it's a direct reply to a page comment
     if (isReply && classification.classification === "unclear") {
       return {
         action: ctx.publicReplyEnabled ? "public_reply_and_wait" : "ignore",
@@ -153,6 +193,7 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
         shouldCreateLead: false,
         shouldUpdateLead: ctx.hasExistingLead,
         priority: "low",
+        confidenceTier: tier,
       };
     }
 
@@ -162,16 +203,16 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
       shouldCreateLead: false,
       shouldUpdateLead: false,
       priority: "skip",
+      confidenceTier: tier,
     };
   }
 
   // ============================================
-  // LEAD SIGNAL DETECTED — Decide reply strategy
+  // LEAD SIGNAL DETECTED — Apply confidence tiers
   // ============================================
 
   // Already sent a private reply for a previous comment
   if (ctx.previousPrivateReplySent) {
-    // Don't send another private reply, but maybe a public acknowledgment
     if (ctx.publicReplyEnabled && ctx.previousCommentCount <= 3) {
       return {
         action: "public_reply_only",
@@ -179,6 +220,7 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
         shouldCreateLead: false,
         shouldUpdateLead: true,
         priority: "medium",
+        confidenceTier: tier,
       };
     }
     return {
@@ -187,50 +229,82 @@ export function decideCommentAction(ctx: CommentDecisionContext): CommentDecisio
       shouldCreateLead: false,
       shouldUpdateLead: true,
       priority: "low",
+      confidenceTier: tier,
     };
   }
 
-  // High-confidence lead signal — try private reply
-  if (classification.confidence >= 0.7 && ctx.privateReplyEnabled) {
+  // === TIER: HIGH (>= 0.85) — Full auto: reply + DM ===
+  if (tier === "high") {
+    if (ctx.privateReplyEnabled) {
+      return {
+        action: "send_private_reply",
+        reasoning: `HIGH confidence ${classification.classification} (${classification.confidence.toFixed(2)}) — full auto: reply + DM`,
+        shouldCreateLead: !ctx.hasExistingLead,
+        shouldUpdateLead: ctx.hasExistingLead,
+        priority: "high",
+        confidenceTier: "high",
+      };
+    }
+    if (ctx.publicReplyEnabled) {
+      return {
+        action: "public_reply_only",
+        reasoning: `HIGH confidence but private reply disabled — public reply only`,
+        shouldCreateLead: !ctx.hasExistingLead,
+        shouldUpdateLead: ctx.hasExistingLead,
+        priority: "high",
+        confidenceTier: "high",
+      };
+    }
     return {
-      action: "send_private_reply",
-      reasoning: `High-confidence ${classification.classification} (${classification.confidence.toFixed(2)}) — sending private reply`,
+      action: "create_lead_only",
+      reasoning: `HIGH confidence but all replies disabled — creating lead only`,
       shouldCreateLead: !ctx.hasExistingLead,
       shouldUpdateLead: ctx.hasExistingLead,
       priority: "high",
+      confidenceTier: "high",
     };
   }
 
-  // Medium-confidence lead signal — public reply and wait
-  if (classification.confidence >= ctx.confidenceThreshold) {
+  // === TIER: SAFE (>= 0.60) — Safe auto: reply + DM (with conservative templates) ===
+  if (tier === "safe") {
     if (ctx.privateReplyEnabled && !isReply) {
-      // Still try private reply for direct comments even at medium confidence
       return {
         action: "send_private_reply",
-        reasoning: `Medium-confidence ${classification.classification} (${classification.confidence.toFixed(2)}) — trying private reply`,
+        reasoning: `SAFE confidence ${classification.classification} (${classification.confidence.toFixed(2)}) — safe auto: reply + DM`,
         shouldCreateLead: !ctx.hasExistingLead,
         shouldUpdateLead: ctx.hasExistingLead,
         priority: "medium",
+        confidenceTier: "safe",
       };
     }
-
     if (ctx.publicReplyEnabled) {
       return {
         action: "public_reply_and_wait",
-        reasoning: `Medium-confidence lead signal — public reply to engage`,
+        reasoning: `SAFE confidence — public reply to engage, waiting for response`,
         shouldCreateLead: !ctx.hasExistingLead,
         shouldUpdateLead: ctx.hasExistingLead,
         priority: "medium",
+        confidenceTier: "safe",
       };
     }
+    return {
+      action: "create_lead_only",
+      reasoning: `SAFE confidence but replies disabled — creating lead only`,
+      shouldCreateLead: !ctx.hasExistingLead,
+      shouldUpdateLead: ctx.hasExistingLead,
+      priority: "medium",
+      confidenceTier: "safe",
+    };
   }
 
-  // Fallback
+  // === TIER: LOW (< 0.60) — No reply: create lead + alert ===
   return {
-    action: ctx.publicReplyEnabled ? "public_reply_only" : "ignore",
-    reasoning: "Lead signal detected but conditions not met for private reply",
+    action: "create_lead_only",
+    reasoning: `LOW confidence ${classification.classification} (${classification.confidence.toFixed(2)}) — no auto-reply, creating lead + alert for manual review`,
     shouldCreateLead: !ctx.hasExistingLead && classification.is_lead_signal,
     shouldUpdateLead: ctx.hasExistingLead,
     priority: "low",
+    confidenceTier: "low",
+    needsManualReview: true,
   };
 }

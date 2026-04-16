@@ -11,6 +11,8 @@ import {
   Zap,
   Bot,
   Link2,
+  CreditCard,
+  Rocket,
 } from "lucide-react";
 
 const navigation = [
@@ -18,6 +20,7 @@ const navigation = [
   { name: "Leads", href: "/leads", icon: Users },
   { name: "Connect Page", href: "/connect", icon: Link2 },
   { name: "Test Bot", href: "/test", icon: Bot },
+  { name: "Billing", href: "/billing", icon: CreditCard },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 

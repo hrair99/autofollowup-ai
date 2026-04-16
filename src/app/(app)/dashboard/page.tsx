@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { LeadStatus } from "@/lib/types";
+import { AutomationToggle, RoiDisplay, AlertsPanel } from "./DashboardWidgets";
 
 function getServiceClient() {
   return createClient(
@@ -37,6 +38,21 @@ async function getStats() {
   const serviceClient = getServiceClient();
 
   // Scope queries to business or user
+  // Fetch business settings for automation toggle
+  let businessMode = "monitor";
+  let onboardingCompleted = false;
+  if (businessId) {
+    const { data: biz } = await serviceClient
+      .from("businesses")
+      .select("mode, onboarding_completed")
+      .eq("id", businessId)
+      .single();
+    if (biz) {
+      businessMode = biz.mode || "monitor";
+      onboardingCompleted = !!biz.onboarding_completed;
+    }
+  }
+
   const scope = businessId
     ? { column: "business_id" as const, value: businessId }
     : { column: "user_id" as const, value: user.id };
@@ -147,6 +163,8 @@ async function getStats() {
         : 0,
     connectedPages: connectedPagesRes.data || [],
     businessId,
+    businessMode,
+    onboardingCompleted,
   };
 }
 
@@ -228,6 +246,17 @@ export default async function DashboardPage() {
 
       {/* System Health Banner */}
       {health && <SystemHealthBanner health={health} />}
+
+      {/* Automation Toggle + ROI + Alerts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        <AutomationToggle
+          initialMode={stats?.businessMode || "monitor"}
+          hasConnectedPage={(stats?.connectedPages?.length || 0) > 0}
+          onboardingCompleted={stats?.onboardingCompleted || false}
+        />
+        <RoiDisplay />
+        <AlertsPanel />
+      </div>
 
       {/* Connected Pages Status */}
       {stats?.connectedPages && stats.connectedPages.length > 0 && (

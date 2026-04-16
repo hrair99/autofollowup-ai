@@ -4,6 +4,11 @@
 // ============================================
 
 import { groqJson } from "./groq-client";
+import type { BusinessProfile } from "../business/profiles";
+import {
+  matchProfileIntent,
+  extractProfileEntities,
+} from "../business/profiles";
 
 // ============================================
 // Types
@@ -203,29 +208,42 @@ const NON_LEAD_PATTERNS: RegExp[] = [
 // Entity extraction
 // ============================================
 
-function extractEntities(text: string): CommentClassificationResult["entities"] {
+function extractEntities(
+  text: string,
+  profile?: BusinessProfile
+): CommentClassificationResult["entities"] {
+  // If we have a business profile, use profile-driven extraction
+  if (profile) {
+    const profileEntities = extractProfileEntities(text, profile);
+    return {
+      service_type: profileEntities.service_type || profileEntities.issue_type || undefined,
+      job_type: profileEntities.job_type || undefined,
+      urgency: profileEntities.urgency || undefined,
+      location: profileEntities.location || undefined,
+      // Spread any extra profile-specific fields
+      ...profileEntities,
+    };
+  }
+
+  // Fallback: hardcoded HVAC extraction (legacy compatibility)
   const entities: CommentClassificationResult["entities"] = {};
   const lower = text.toLowerCase();
 
-  // Service type
   if (/\bsplit\s*(system)?/i.test(text)) entities.service_type = "split system";
   else if (/\bducted/i.test(text)) entities.service_type = "ducted system";
   else if (/\bmulti[\s-]?head/i.test(text)) entities.service_type = "multi-head";
   else if (/\b(aircon|air con|air conditioning|ac|hvac)\b/i.test(text)) entities.service_type = "air conditioning";
 
-  // Job type
   if (/\b(install|installation|new)\b/i.test(lower)) entities.job_type = "install";
   else if (/\b(repair|fix|broken|not working)\b/i.test(lower)) entities.job_type = "repair";
   else if (/\b(service|maintenance|clean)\b/i.test(lower)) entities.job_type = "service";
 
-  // Urgency
   if (/\b(asap|urgent|emergency|today|right now|immediately)\b/i.test(lower)) {
     entities.urgency = "high";
   } else if (/\b(this week|soon|when available)\b/i.test(lower)) {
     entities.urgency = "normal";
   }
 
-  // Location — look for Australian suburb patterns (word + optional 4-digit postcode)
   const locationMatch = text.match(/\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s+(\d{4})\b/);
   if (locationMatch) {
     entities.location = `${locationMatch[1]} ${locationMatch[2]}`;
@@ -238,7 +256,7 @@ function extractEntities(text: string): CommentClassificationResult["entities"] 
 // Rule-based classification
 // ============================================
 
-function classifyByRules(text: string): RuleMatch | null {
+function classifyByRules(text: string, profile?: BusinessProfile): RuleMatch | null {
   const trimmed = text.trim();
 
   // Skip very short non-lead comments
@@ -253,7 +271,19 @@ function classifyByRules(text: string): RuleMatch | null {
     }
   }
 
-  // Check strong lead patterns
+  // Check profile-specific intents FIRST (industry-aware classification)
+  if (profile) {
+    const intent = matchProfileIntent(trimmed, profile);
+    if (intent) {
+      return {
+        classification: intent.classification,
+        confidence: intent.confidence,
+        reasoning: `Profile intent: ${intent.label}`,
+      };
+    }
+  }
+
+  // Check strong lead patterns (generic)
   for (const rule of STRONG_LEAD_PATTERNS) {
     for (const pattern of rule.patterns) {
       if (pattern.test(trimmed)) {
@@ -291,16 +321,26 @@ function buildClassificationPrompt(businessContext?: {
   businessDescription?: string;
   serviceType?: string;
   serviceCategories?: string[];
+  profile?: BusinessProfile;
 }): string {
+  const profile = businessContext?.profile;
   const bizDesc = businessContext?.businessDescription
     || businessContext?.serviceType
+    || profile?.industryLabel
     || "a service business";
   const bizName = businessContext?.businessName || "the business";
-  const categories = businessContext?.serviceCategories?.length
-    ? `\nServices offered: ${businessContext.serviceCategories.join(", ")}`
+  const categories = profile?.serviceCategories?.length
+    ? `\nServices offered: ${profile.serviceCategories.join(", ")}`
+    : businessContext?.serviceCategories?.length
+      ? `\nServices offered: ${businessContext.serviceCategories.join(", ")}`
+      : "";
+
+  // Include profile-specific intents as classification hints
+  const intentHints = profile?.commonIntents?.length
+    ? `\n\nIndustry-specific intents to look for:\n${profile.commonIntents.map((i) => `- "${i.key}": ${i.label}`).join("\n")}`
     : "";
 
-  return `You are a comment classifier for ${bizName} (${bizDesc}) Facebook page.${categories}
+  return `You are a comment classifier for ${bizName} (${bizDesc}) Facebook page.${categories}${intentHints}
 
 Analyze the comment and return a JSON object:
 
@@ -382,13 +422,15 @@ export async function classifyComment(
       businessDescription?: string;
       serviceType?: string;
       serviceCategories?: string[];
+      profile?: BusinessProfile;
     };
   }
 ): Promise<CommentClassificationResult> {
-  const entities = extractEntities(commentText);
+  const profile = options?.businessContext?.profile;
+  const entities = extractEntities(commentText, profile);
 
-  // Step 1: Try deterministic rules
-  const ruleResult = classifyByRules(commentText);
+  // Step 1: Try deterministic rules (profile-aware)
+  const ruleResult = classifyByRules(commentText, profile);
 
   if (ruleResult && ruleResult.confidence >= 0.85) {
     // High-confidence rule match — use it directly
@@ -486,10 +528,14 @@ function isLeadClassification(classification: CommentClassification): boolean {
  * Quick check if a comment text matches any lead keywords.
  * Used for fast filtering before full classification.
  */
-export function quickLeadSignalCheck(text: string, customKeywords?: string[]): boolean {
+export function quickLeadSignalCheck(
+  text: string,
+  customKeywords?: string[],
+  profile?: BusinessProfile
+): boolean {
   const lower = text.toLowerCase().trim();
 
-  // Built-in lead signal words
+  // Built-in lead signal words (generic, work across all industries)
   const builtInPatterns = [
     /\b(price|pricing|how much|cost|quote|estimate)\b/,
     /\b(interested|interest|need|want|looking for)\b/,
@@ -497,10 +543,16 @@ export function quickLeadSignalCheck(text: string, customKeywords?: string[]): b
     /\b(book|booking|available|availability)\b/,
     /\b(can you|how do i|do you)\b/,
     /\b(repair|install|service|maintenance)\b/,
-    /\b(aircon|air con|split|ducted|hvac)\b/,
   ];
 
   if (builtInPatterns.some((p) => p.test(lower))) return true;
+
+  // Profile-specific keywords (industry-aware)
+  if (profile?.quickLeadKeywords?.length) {
+    if (profile.quickLeadKeywords.some((kw) => lower.includes(kw.toLowerCase()))) {
+      return true;
+    }
+  }
 
   // Custom keywords from settings
   if (customKeywords?.length) {

@@ -22,6 +22,9 @@ import {
   resolveBusinessByPage,
 } from "../business/resolve";
 import { canPerformAction } from "../rateLimit/businessLimiter";
+import { getBusinessProfile, getBuiltInProfile } from "../business/profiles";
+import type { BusinessProfile } from "../business/profiles";
+import { scoreAndPersistLead } from "../leads/scoring";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<any, any, any>;
@@ -104,6 +107,11 @@ export async function handleComment(
       return;
     }
 
+    // --- 1b. Load business profile (industry-specific) ---
+    const profile: BusinessProfile = businessId
+      ? await getBusinessProfile(businessId)
+      : getBuiltInProfile("hvac"); // Legacy fallback for HR AIR
+
     // Check if comment monitoring is enabled
     if (!settings.comment_monitoring_enabled && settings.comment_monitoring_enabled !== undefined) {
       console.log("[CommentHandler] Comment monitoring disabled");
@@ -116,16 +124,16 @@ export async function handleComment(
       `[CommentHandler] Rules: intent=${rule.intent} urgency=${rule.urgency} conf=${rule.confidence.toFixed(2)} spam=${rule.isSpam}`
     );
 
-    // --- 2b. Quick lead signal check (fast filter) ---
-    const quickCheck = quickLeadSignalCheck(text, settings.comment_lead_keywords);
+    // --- 2b. Quick lead signal check (fast filter, profile-aware) ---
+    const quickCheck = quickLeadSignalCheck(text, settings.comment_lead_keywords, profile);
 
-    // --- 3. Full classification ---
-    // Build business context for AI classification
+    // --- 3. Full classification (profile-aware) ---
     const bizClassCtx = settings ? {
       businessName: settings.business_name || bizCtx?.businessName || undefined,
       businessDescription: settings.business_description || undefined,
       serviceType: settings.service_type || undefined,
-      serviceCategories: settings.service_categories || undefined,
+      serviceCategories: settings.service_categories || profile.serviceCategories || undefined,
+      profile,
     } : undefined;
 
     // Skip AI if rules are confident OR the text is tiny and non-matching.
@@ -154,10 +162,13 @@ export async function handleComment(
       confidenceThreshold: settings.comment_confidence_threshold ?? 0.4,
       escalationThreshold: settings.comment_escalation_threshold ?? 0.8,
       commentCooldownMinutes: settings.comment_cooldown_minutes ?? 5,
+      confidenceHighThreshold: (settings as any).confidence_high_threshold ?? 0.85,
+      confidenceSafeThreshold: (settings as any).confidence_safe_threshold ?? 0.60,
       lastReplyToUserAt: userReplyHistory.lastSentAt,
       commentAge: 0, // Fresh webhook, age is ~0
       isReply: isReply || false,
       isFromPage: false, // Already filtered in webhook normalizer
+      mode: bizCtx?.mode,
     });
 
     console.log(`[CommentHandler] Decision: ${decision.action} | ${decision.reasoning}`);
@@ -249,6 +260,16 @@ export async function handleComment(
           classification: classification.classification,
         });
 
+        // Score the lead
+        await scoreAndPersistLead(leadId, {
+          classification: classification.classification,
+          urgency: classification.urgency || undefined,
+          comment_count: 1,
+          private_reply_count: 0,
+          created_at: new Date().toISOString(),
+          entities: classification.entities,
+        });
+
         // Update comment record with lead_id
         await supabase
           .from("comments")
@@ -325,6 +346,8 @@ export async function handleComment(
       leadId,
       commentRecordId: commentRecord.id,
       pageToken: bizCtx?.pageToken,
+      profile,
+      businessId,
     });
 
     // --- 10. Log automation (with full decision trace) ---
@@ -390,9 +413,11 @@ async function executeAction(
     leadId: string | null;
     commentRecordId: string;
     pageToken?: string;
+    profile?: BusinessProfile;
+    businessId?: string | null;
   }
 ): Promise<void> {
-  const { action, commentId, pageId, text, classification, settings, commentRecordId, pageToken } = ctx;
+  const { action, commentId, pageId, text, classification, settings, commentRecordId, pageToken, businessId } = ctx;
 
   // Always like the comment for engagement
   await likeComment(commentId, pageId, pageToken);
@@ -439,6 +464,7 @@ async function executeAction(
             enquiryFormUrl: settings.enquiry_form_url,
             customTemplates: settings.comment_reply_templates,
             businessName: settings.business_name || undefined,
+            profile,
           });
 
           const publicResult = await postPublicReply(commentId, publicReply, pageId, pageToken);
@@ -490,6 +516,39 @@ async function executeAction(
       break;
     }
 
+    case "create_lead_only": {
+      // Low confidence or monitor mode — create/update lead but don't reply
+      await supabase
+        .from("comments")
+        .update({ action_taken: "create_lead_only" })
+        .eq("id", commentRecordId);
+
+      // Create an alert for manual review
+      if (businessId) {
+        await supabase.from("business_alerts").insert({
+          business_id: businessId,
+          alert_type: "low_confidence_lead",
+          severity: "warning",
+          message: `Low-confidence lead detected: "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}" — needs manual review`,
+          metadata: {
+            comment_id: commentId,
+            classification: classification.classification,
+            confidence: classification.confidence,
+            lead_id: ctx.leadId,
+          },
+        }).catch(() => {}); // Non-critical
+      }
+
+      // Mark lead as needing manual review
+      if (ctx.leadId) {
+        await supabase
+          .from("leads")
+          .update({ needs_manual_review: true })
+          .eq("id", ctx.leadId);
+      }
+      break;
+    }
+
     case "ignore": {
       await supabase
         .from("comments")
@@ -510,10 +569,11 @@ async function executePublicReply(
     settings: Settings;
     commentRecordId: string;
     pageToken?: string;
+    profile?: BusinessProfile;
   },
   commentRecordId: string
 ): Promise<void> {
-  const { commentId, pageId, text, classification, settings, pageToken } = ctx;
+  const { commentId, pageId, text, classification, settings, pageToken, profile: ctxProfile } = ctx;
 
   // Try AI-generated reply first, fall back to template
   let replyText = await generateAiPublicReply(text, {
@@ -525,6 +585,7 @@ async function executePublicReply(
     serviceAreas: settings.service_areas,
     location: classification.location || undefined,
     urgency: classification.urgency || undefined,
+    profile: ctxProfile,
   });
 
   if (!replyText) {
@@ -532,6 +593,7 @@ async function executePublicReply(
       enquiryFormUrl: settings.enquiry_form_url,
       customTemplates: settings.comment_reply_templates,
       businessName: settings.business_name || undefined,
+      profile: ctxProfile,
     });
   }
 

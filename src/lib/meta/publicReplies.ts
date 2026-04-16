@@ -6,6 +6,11 @@
 import { graphApi, getPageToken } from "./client";
 import { groqChat } from "../ai/groq-client";
 import type { CommentClassification } from "../ai/commentClassifier";
+import type { BusinessProfile } from "../business/profiles";
+import {
+  getProfileReplyTemplates,
+  containsBannedPhrase,
+} from "../business/profiles";
 
 export interface PublicReplyResult {
   success: boolean;
@@ -122,11 +127,12 @@ export function getTemplateReply(
     enquiryFormUrl?: string | null;
     customTemplates?: string[];
     businessName?: string;
+    profile?: BusinessProfile;
   }
 ): string {
-  const { enquiryFormUrl, customTemplates, businessName } = options;
+  const { enquiryFormUrl, customTemplates, businessName, profile } = options;
 
-  // Use custom templates if available
+  // Use custom templates if available (settings-level override)
   if (customTemplates && customTemplates.length > 0) {
     const template = customTemplates[Math.floor(Math.random() * customTemplates.length)];
     return template
@@ -134,11 +140,21 @@ export function getTemplateReply(
       .replace("{business}", businessName || "us");
   }
 
-  // Pick from defaults
+  // Use profile-specific templates if available
+  if (profile) {
+    const profileTemplates = getProfileReplyTemplates(classification, profile);
+    if (profileTemplates.length > 0) {
+      const linkSuffix = enquiryFormUrl ? `: ${enquiryFormUrl}` : "";
+      let reply = profileTemplates[Math.floor(Math.random() * profileTemplates.length)];
+      reply = reply.replace("{link_suffix}", linkSuffix);
+      return reply;
+    }
+  }
+
+  // Pick from defaults (legacy HVAC templates)
   const templates = DEFAULT_TEMPLATES[classification] || DEFAULT_TEMPLATES.default;
   let reply = templates[Math.floor(Math.random() * templates.length)];
 
-  // Replace link suffix
   const linkSuffix = enquiryFormUrl ? `: ${enquiryFormUrl}` : "";
   reply = reply.replace("{link_suffix}", linkSuffix);
 
@@ -160,6 +176,7 @@ export async function generateAiPublicReply(
     serviceAreas?: string[];
     location?: string;
     urgency?: string;
+    profile?: BusinessProfile;
   }
 ): Promise<string | null> {
   const {
@@ -171,9 +188,11 @@ export async function generateAiPublicReply(
     serviceAreas,
     location,
     urgency,
+    profile,
   } = options;
 
-  const voiceTone = tone || "friendly Australian";
+  const voiceTone = tone || profile?.defaultTone || "friendly Australian";
+  const areas = serviceAreas?.length ? serviceAreas : profile?.defaultServiceAreas || [];
 
   // Build context about what we know
   const contextParts: string[] = [];
@@ -182,11 +201,22 @@ export async function generateAiPublicReply(
   if (urgency === "high" || urgency === "emergency") {
     contextParts.push("This seems urgent — acknowledge that");
   }
-  if (serviceAreas?.length) {
-    contextParts.push(`We service: ${serviceAreas.join(", ")}`);
+  if (areas.length) {
+    contextParts.push(`We service: ${areas.join(", ")}`);
+  }
+  if (profile?.industryLabel) {
+    contextParts.push(`Industry: ${profile.industryLabel}`);
+  }
+  if (profile?.serviceCategories?.length) {
+    contextParts.push(`Services: ${profile.serviceCategories.slice(0, 5).join(", ")}`);
   }
   const contextBlock = contextParts.length > 0
     ? `\nContext:\n${contextParts.map((c) => `- ${c}`).join("\n")}\n`
+    : "";
+
+  // Banned phrases instruction
+  const bannedBlock = profile?.bannedPhrases?.length
+    ? `\nNEVER use these phrases: ${profile.bannedPhrases.map((p) => `"${p}"`).join(", ")}\n`
     : "";
 
   const systemPrompt = `You are a ${voiceTone} social media assistant for ${businessName}.
@@ -207,7 +237,7 @@ RULES:
 - If the comment mentions a specific service or location, reference it naturally
 - If it's urgent, acknowledge the urgency
 ${enquiryFormUrl ? `- Include this link if natural to do so: ${enquiryFormUrl}` : "- Direct them to send the page a message"}
-
+${bannedBlock}
 The comment was classified as: ${classification}
 ${contextBlock}`;
 
@@ -221,7 +251,13 @@ ${contextBlock}`;
 
   // Clean up any quotes the AI might have wrapped the reply in
   if (reply) {
-    return reply.replace(/^["']|["']$/g, "").trim();
+    const cleaned = reply.replace(/^["']|["']$/g, "").trim();
+    // Safety check: verify no banned phrases slipped through
+    if (profile && containsBannedPhrase(cleaned, profile)) {
+      console.warn("[PublicReply] AI reply contained banned phrase, falling back to template");
+      return null; // Caller should fall back to template
+    }
+    return cleaned;
   }
 
   return reply;

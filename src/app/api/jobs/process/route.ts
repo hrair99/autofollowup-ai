@@ -2,6 +2,7 @@
 // Job worker — POST /api/jobs/process
 // Claims up to N pending jobs and runs them. Safe to call from a
 // Vercel cron or a warm ping. Requires CRON_SECRET.
+// Checks subscription gate + usage limits before processing.
 // ============================================
 
 import { NextRequest, NextResponse } from "next/server";
@@ -9,6 +10,7 @@ import { claimNextJob, completeJob, failJob } from "@/lib/jobs/queue";
 import { handleComment } from "@/lib/conversation/commentHandler";
 import { handleMessengerMessage } from "@/lib/conversation/engine";
 import { resolveBusinessByPage } from "@/lib/business/resolve";
+import { checkSubscriptionGate, checkAndIncrementUsage } from "@/lib/billing/stripe";
 import type { NormalizedWebhookEvent } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -33,8 +35,9 @@ export async function POST(req: NextRequest) {
   const results: Array<{
     jobId: string;
     type: string;
-    status: "done" | "failed";
+    status: "done" | "failed" | "skipped";
     error?: string;
+    reason?: string;
   }> = [];
 
   for (let i = 0; i < MAX_BATCH; i++) {
@@ -48,10 +51,42 @@ export async function POST(req: NextRequest) {
       };
       if (!payload?.event) throw new Error("missing_event_payload");
 
-      // Resolve business context from the job's business_id or the event's pageId
-      const bizCtx = payload.business_id
-        ? await resolveBusinessByPage(payload.event.pageId)
-        : await resolveBusinessByPage(payload.event.pageId);
+      // Resolve business context from the event's pageId
+      const bizCtx = await resolveBusinessByPage(payload.event.pageId);
+
+      // --- Subscription gate ---
+      if (bizCtx) {
+        const subGate = await checkSubscriptionGate(bizCtx.businessId);
+        if (!subGate.allowed) {
+          // Subscription inactive — skip this job but mark it done (not retryable)
+          await completeJob(job.id);
+          results.push({
+            jobId: job.id,
+            type: job.type,
+            status: "skipped",
+            reason: `subscription_blocked:${subGate.reason}`,
+          });
+          continue;
+        }
+
+        // --- Usage gate ---
+        const metric = job.type === "handle_comment" ? "comments_processed" : "dms_sent";
+        const usageGate = await checkAndIncrementUsage(
+          bizCtx.businessId,
+          metric as any,
+          subGate.plan
+        );
+        if (!usageGate.allowed) {
+          await completeJob(job.id);
+          results.push({
+            jobId: job.id,
+            type: job.type,
+            status: "skipped",
+            reason: usageGate.reason,
+          });
+          continue;
+        }
+      }
 
       if (job.type === "handle_comment") {
         await handleComment(payload.event, bizCtx ?? undefined);
@@ -91,6 +126,8 @@ export async function GET(req: NextRequest) {
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ status: "unauthorized" }, { status: 401 });
   }
-  return POST(
-    new NextRequest(req.url, {
-      method: 
+  // Forward as POST
+  const headers = new Headers(req.headers);
+  if (secret) headers.set("x-cron-secret", secret);
+  return POST(new NextRequest(req.url, { method: "POST", headers }));
+}
