@@ -1,4 +1,6 @@
 import { createServerSupabase } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
+import { getUserBusinessId } from "@/lib/business/resolve";
 import {
   Users,
   Clock,
@@ -10,9 +12,19 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  MessageCircle,
+  Zap,
+  Link2,
 } from "lucide-react";
 import Link from "next/link";
 import type { LeadStatus } from "@/lib/types";
+
+function getServiceClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
 
 async function getStats() {
   const supabase = createServerSupabase();
@@ -21,31 +33,79 @@ async function getStats() {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const [leadsRes, followUpsRes, recentMessagesRes, recentLogsRes] = await Promise.all([
-    supabase.from("leads").select("*").eq("user_id", user.id),
-    supabase
+  const businessId = await getUserBusinessId(user.id);
+  const serviceClient = getServiceClient();
+
+  // Scope queries to business or user
+  const scope = businessId
+    ? { column: "business_id" as const, value: businessId }
+    : { column: "user_id" as const, value: user.id };
+
+  const now = new Date();
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [
+    leadsRes,
+    followUpsRes,
+    recentMessagesRes,
+    recentLogsRes,
+    recentCommentsRes,
+    failedJobsRes,
+    commentStats7dRes,
+    connectedPagesRes,
+  ] = await Promise.all([
+    serviceClient.from("leads").select("*").eq(scope.column, scope.value),
+    serviceClient
       .from("follow_ups")
-      .select("*")
-      .eq("user_id", user.id)
+      .select("id", { count: "exact", head: true })
+      .eq(scope.column, scope.value)
       .eq("status", "pending"),
-    supabase
+    serviceClient
       .from("messages")
       .select("*, leads:lead_id(name, email, company)")
-      .eq("user_id", user.id)
+      .eq(scope.column, scope.value)
       .order("created_at", { ascending: false })
       .limit(6),
-    supabase
+    serviceClient
       .from("automation_logs")
       .select("*, leads:lead_id(name)")
+      .eq(scope.column, scope.value)
       .order("created_at", { ascending: false })
       .limit(8),
+    serviceClient
+      .from("comments")
+      .select(
+        "id, comment_text, commenter_name, classification, public_reply_text, private_reply_sent_at, created_at"
+      )
+      .eq(scope.column, scope.value)
+      .order("created_at", { ascending: false })
+      .limit(8),
+    serviceClient
+      .from("automation_jobs")
+      .select("id, type, status, last_error, attempts, max_attempts, created_at, updated_at")
+      .eq(scope.column, scope.value)
+      .in("status", ["failed", "dead"])
+      .order("updated_at", { ascending: false })
+      .limit(5),
+    serviceClient
+      .from("comments")
+      .select("id, classification, public_reply_text, private_reply_sent_at")
+      .eq(scope.column, scope.value)
+      .gte("created_at", sevenDaysAgo),
+    businessId
+      ? serviceClient
+          .from("business_pages")
+          .select("page_id, page_name, is_active, token_status")
+          .eq("business_id", businessId)
+      : Promise.resolve({ data: [] as { page_id: string; page_name: string; is_active: boolean; token_status: string }[] }),
   ]);
 
   const allLeads = leadsRes.data || [];
   const totalLeads = allLeads.length;
   const respondedLeads = allLeads.filter((l) => l.status === "responded").length;
   const bookedLeads = allLeads.filter((l) => l.status === "booked").length;
-  const activeFollowUps = followUpsRes.data?.length || 0;
+  const activeFollowUps = followUpsRes.count || 0;
   const responseRate =
     totalLeads > 0
       ? Math.round(((respondedLeads + bookedLeads) / totalLeads) * 100)
@@ -56,10 +116,15 @@ async function getStats() {
     leadsByStatus[l.status] = (leadsByStatus[l.status] || 0) + 1;
   });
 
-  // Leads added in last 24h
-  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
   const newLast24h = allLeads.filter(
-    (l) => new Date(l.created_at).getTime() > oneDayAgo
+    (l) => l.created_at >= oneDayAgo
+  ).length;
+
+  // Comment stats
+  const allComments7d = commentStats7dRes.data || [];
+  const totalComments7d = allComments7d.length;
+  const repliedComments7d = allComments7d.filter(
+    (c) => c.public_reply_text || c.private_reply_sent_at
   ).length;
 
   return {
@@ -72,11 +137,20 @@ async function getStats() {
     newLast24h,
     recentMessages: recentMessagesRes.data || [],
     recentLogs: recentLogsRes.data || [],
+    recentComments: recentCommentsRes.data || [],
+    failedJobs: failedJobsRes.data || [],
+    totalComments7d,
+    repliedComments7d,
+    commentReplyRate:
+      totalComments7d > 0
+        ? Math.round((repliedComments7d / totalComments7d) * 100)
+        : 0,
+    connectedPages: connectedPagesRes.data || [],
+    businessId,
   };
 }
 
 async function getSystemHealth() {
-  // Server-side fetch to our own diag endpoint, best-effort.
   try {
     const base = process.env.VERCEL_URL
       ? `https://${process.env.VERCEL_URL}`
@@ -104,16 +178,18 @@ const statCards = [
     subLabel: "new today",
   },
   {
+    key: "totalComments7d",
+    label: "Comments (7d)",
+    icon: MessageCircle,
+    color: "text-orange-600 bg-orange-50",
+    subKey: "commentReplyRate",
+    subLabel: "% reply rate",
+  },
+  {
     key: "activeFollowUps",
     label: "Active Follow-ups",
     icon: Clock,
     color: "text-purple-600 bg-purple-50",
-  },
-  {
-    key: "respondedLeads",
-    label: "Responded",
-    icon: MessageSquare,
-    color: "text-green-600 bg-green-50",
   },
   {
     key: "bookedLeads",
@@ -132,17 +208,55 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Overview of your lead follow-up pipeline
+            Overview of your lead follow-up pipeline and automation activity
           </p>
         </div>
-        <Link href="/leads" className="btn-primary">
-          <Users className="h-4 w-4 mr-2" />
-          View all leads
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/connect"
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <Link2 className="h-4 w-4" />
+            Pages
+          </Link>
+          <Link href="/leads" className="btn-primary">
+            <Users className="h-4 w-4 mr-2" />
+            View all leads
+          </Link>
+        </div>
       </div>
 
       {/* System Health Banner */}
       {health && <SystemHealthBanner health={health} />}
+
+      {/* Connected Pages Status */}
+      {stats?.connectedPages && stats.connectedPages.length > 0 && (
+        <div className="mb-6 flex flex-wrap gap-2">
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          {(stats.connectedPages as any[]).map((page: any) => (
+            <div
+              key={page.page_id}
+              className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs"
+            >
+              <div
+                className={`h-2 w-2 rounded-full ${
+                  page.is_active && page.token_status === "valid"
+                    ? "bg-green-500"
+                    : page.token_status === "invalid" || page.token_status === "expired"
+                      ? "bg-red-500"
+                      : "bg-yellow-500"
+                }`}
+              />
+              <span className="font-medium text-gray-700">
+                {page.page_name || page.page_id}
+              </span>
+              <span className="text-gray-400">
+                {page.is_active ? "Active" : "Paused"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
@@ -161,7 +275,7 @@ export default async function DashboardPage() {
                 <p className="text-2xl font-bold text-gray-900">{value}</p>
                 {sub !== null && sub > 0 && (
                   <p className="text-xs text-emerald-600 font-medium">
-                    +{sub} {card.subLabel}
+                    {card.subLabel?.includes("%") ? `${sub}${card.subLabel}` : `+${sub} ${card.subLabel}`}
                   </p>
                 )}
               </div>
@@ -237,11 +351,89 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Recent Activity: Messages + Automation Logs */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {/* Recent Activity: Comments + Messages */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-8">
+        {/* Recent Comments */}
         <div className="card">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Messages</h2>
+            <div className="flex items-center gap-2">
+              <MessageCircle className="h-5 w-5 text-orange-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Recent Comments</h2>
+            </div>
+            <span className="text-xs text-gray-400">
+              {stats?.totalComments7d || 0} this week
+            </span>
+          </div>
+          {stats?.recentComments && stats.recentComments.length > 0 ? (
+            <div className="divide-y divide-gray-100">
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              {stats.recentComments.map((comment: any) => (
+                <div key={comment.id} className="py-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-medium text-gray-900">
+                      {comment.commenter_name || "Unknown"}
+                    </span>
+                    {comment.classification && (
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                          comment.classification === "lead"
+                            ? "bg-blue-50 text-blue-700"
+                            : comment.classification === "complaint"
+                              ? "bg-red-50 text-red-700"
+                              : comment.classification === "question"
+                                ? "bg-yellow-50 text-yellow-700"
+                                : "bg-gray-50 text-gray-600"
+                        }`}
+                      >
+                        {comment.classification}
+                      </span>
+                    )}
+                    <span className="ml-auto text-xs text-gray-400">
+                      {new Date(comment.created_at).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-700 truncate">
+                    {comment.comment_text || "(empty)"}
+                  </p>
+                  <div className="flex items-center gap-3 mt-1">
+                    {comment.public_reply_text && (
+                      <span className="text-xs text-green-600">
+                        ✓ Public reply sent
+                      </span>
+                    )}
+                    {comment.private_reply_sent_at && (
+                      <span className="text-xs text-blue-600">
+                        ✓ DM sent
+                      </span>
+                    )}
+                    {!comment.public_reply_text && !comment.private_reply_sent_at && (
+                      <span className="text-xs text-gray-400">
+                        No reply yet
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500 py-4 text-center">
+              No comments tracked yet. Connect a page and enable comment monitoring.
+            </p>
+          )}
+        </div>
+
+        {/* Recent Messages */}
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-blue-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Recent DMs</h2>
+            </div>
             <Link
               href="/leads"
               className="text-sm font-medium text-brand-600 hover:text-brand-500 flex items-center gap-1"
@@ -269,7 +461,7 @@ export default async function DashboardPage() {
                         {msg.direction}
                       </span>
                       <span className="text-xs text-gray-500">
-                        {msg.channel || "?"}
+                        {msg.channel || "messenger"}
                       </span>
                     </div>
                     <p className="text-sm text-gray-900 truncate">
@@ -290,12 +482,14 @@ export default async function DashboardPage() {
             </div>
           ) : (
             <p className="text-sm text-gray-500 py-4 text-center">
-              No messages yet. Once the webhook is subscribed, messages will appear here
-              automatically.
+              No messages yet. Once the webhook is active, DMs will appear here.
             </p>
           )}
         </div>
+      </div>
 
+      {/* Automation Feed + Failed Actions */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="card">
           <div className="flex items-center gap-2 mb-4">
             <Activity className="h-5 w-5 text-brand-600" />
@@ -340,6 +534,58 @@ export default async function DashboardPage() {
             <p className="text-sm text-gray-500 py-4 text-center">
               No automation events yet. Send a DM to the page to trigger the bot.
             </p>
+          )}
+        </div>
+
+        {/* Failed Actions */}
+        <div className="card">
+          <div className="flex items-center gap-2 mb-4">
+            <Zap className="h-5 w-5 text-red-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Failed Actions</h2>
+            {stats?.failedJobs && stats.failedJobs.length > 0 && (
+              <span className="ml-auto inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                {stats.failedJobs.length} issue{stats.failedJobs.length > 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          {stats?.failedJobs && stats.failedJobs.length > 0 ? (
+            <div className="divide-y divide-gray-100">
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              {stats.failedJobs.map((job: any) => (
+                <div key={job.id} className="py-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                        job.status === "dead"
+                          ? "bg-red-100 text-red-800"
+                          : "bg-yellow-100 text-yellow-800"
+                      }`}
+                    >
+                      {job.status === "dead" ? "DEAD" : `Retry ${job.attempts}/${job.max_attempts}`}
+                    </span>
+                    <span className="text-xs font-medium text-gray-700">
+                      {job.type.replace("handle_", "")}
+                    </span>
+                    <span className="ml-auto text-xs text-gray-400">
+                      {new Date(job.updated_at || job.created_at).toLocaleString(
+                        undefined,
+                        { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+                      )}
+                    </span>
+                  </div>
+                  {job.last_error && (
+                    <p className="text-xs text-red-600 truncate">
+                      {job.last_error}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 py-4 justify-center">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <p className="text-sm text-gray-500">No failed actions. All good!</p>
+            </div>
           )}
         </div>
       </div>
