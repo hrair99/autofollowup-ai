@@ -3,6 +3,18 @@
     {
       "path": "/api/cron/follow-ups",
       "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/jobs/process",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/token-health",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/alerts",
+      "schedule": "0 * * * *"
     }
   ]
 }

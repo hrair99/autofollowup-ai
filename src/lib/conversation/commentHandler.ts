@@ -21,6 +21,7 @@ import {
   loadBusinessSettings,
   resolveBusinessByPage,
 } from "../business/resolve";
+import { canPerformAction } from "../rateLimit/businessLimiter";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<any, any, any>;
@@ -282,6 +283,32 @@ export async function handleComment(
           .from("comments")
           .update({ lead_id: leadId })
           .eq("id", commentRecord.id);
+      }
+    }
+
+    // --- 8b. Rate limit check ---
+    if (businessId && finalAction !== "ignore") {
+      const actionType = finalAction === "send_private_reply" ? "dm" : "comment";
+      const rateCheck = await canPerformAction(businessId, actionType);
+      if (!rateCheck.allowed) {
+        console.log(
+          `[CommentHandler] Rate limited: ${rateCheck.reason} (${rateCheck.currentCount}/${rateCheck.limit}/hr)`
+        );
+        await supabase.from("automation_logs").insert({
+          lead_id: leadId,
+          business_id: businessId,
+          event_type: "rate_limited",
+          channel: "facebook_comment",
+          action_taken: "rate_limited",
+          details: {
+            comment_id: commentId,
+            attempted_action: finalAction,
+            rate_limit: rateCheck,
+          },
+          drop_reason: rateCheck.reason,
+          success: false,
+        });
+        return; // Stop — don't execute the action
       }
     }
 
