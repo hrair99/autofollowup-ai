@@ -21,10 +21,13 @@ const STEPS = [
 
 const SAMPLE_COMMENTS = [
   "How much for a split system installed?",
-  "Do you guys service the Gold Coast area?",
   "Need a plumber ASAP, burst pipe flooding my kitchen!",
-  "Can someone come out this week for a quote?",
+  "Blocked drain in my bathroom, can someone come out today?",
+  "Do you guys service the Gold Coast area?",
   "Interested! Can you DM me more info?",
+  "No hot water this morning, can you help?",
+  "Can I get a quote for a new hot water system?",
+  "👍 great work!",
 ];
 
 export default function OnboardingFlow({
@@ -339,20 +342,30 @@ export default function OnboardingFlow({
                   </p>
                 </div>
 
-                {/* Confidence tier indicator */}
-                <div className="flex items-center gap-2 text-sm text-gray-500">
+                {/* Action explanation */}
+                <div className={`flex items-center gap-2 text-sm p-2 rounded ${
+                  testResult.confidenceTier === "high"
+                    ? "bg-green-50 text-green-800"
+                    : testResult.confidenceTier === "safe"
+                    ? "bg-green-50 text-green-700"
+                    : testResult.classification.isLead
+                    ? "bg-yellow-50 text-yellow-800"
+                    : "bg-gray-50 text-gray-600"
+                }`}>
                   <span
-                    className={`w-2 h-2 rounded-full ${
+                    className={`w-2 h-2 rounded-full shrink-0 ${
                       testResult.confidenceTier === "high"
                         ? "bg-green-500"
                         : testResult.confidenceTier === "safe"
                         ? "bg-yellow-500"
-                        : "bg-red-500"
+                        : "bg-gray-400"
                     }`}
                   />
-                  {testResult.wouldAutoReply
-                    ? "This comment would get an automatic reply"
-                    : "This comment would be logged but not auto-replied (low confidence)"}
+                  {testResult.actionExplanation || (
+                    testResult.wouldAutoReply
+                      ? "This comment would get an automatic reply"
+                      : "This comment would be logged but not auto-replied (low confidence)"
+                  )}
                 </div>
               </div>
             )}

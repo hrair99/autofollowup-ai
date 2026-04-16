@@ -218,12 +218,21 @@ const HVAC_PROFILE: BusinessProfile = {
   dmTemplates: {
     pricing_request: [
       "Hey {name}! Thanks for your interest. To give you an accurate price, can you tell us:\n\n- What type of system are you after? (split, ducted, multi-head)\n- How many rooms/zones?\n- Suburb?\n\nWe'll get a quote to you ASAP!",
+      "Hey {name}! Happy to help with pricing. Every install's a bit different so to get you an accurate number:\n\n- What type of system? (split/ducted)\n- New install or replacing an old one?\n- Your suburb?\n\nWe'll get back to you shortly!",
     ],
     quote_request: [
       "Hey {name}! We'd love to help. A few quick details so we can quote accurately:\n\n- What type of system? (new install or replacement?)\n- Size of the space?\n- Your suburb?\n\nWe'll have a quote sorted for you shortly!",
+      "Hey {name}! Yep, happy to quote on that. Can you let us know:\n\n- Split or ducted?\n- How many rooms?\n- Where are you located?\n\nWe'll get numbers to you ASAP!",
     ],
     booking_request: [
       "Hey {name}! Great to hear you'd like to book in. What days/times work best for you? We service most of {service_areas} and can usually get out within a few days.",
+      "Hey {name}! We can definitely get you booked in. What suburb are you in and when suits? We'll lock in a time.",
+    ],
+    support_request: [
+      "Hey {name}! Sorry to hear your AC's playing up. To get the right tech out to you:\n\n- What type of system? (split/ducted)\n- What's it doing? (not cooling, making noise, leaking, etc.)\n- Your suburb?\n\nWe'll get someone sorted for you!",
+    ],
+    lead_interest: [
+      "Hey {name}! Thanks for reaching out. We'd love to help — are you looking at a new install or do you need a repair/service? Let us know your suburb and we'll go from there!",
     ],
     default: [
       "Hey {name}! Thanks for reaching out to {business_name}. How can we help you today?",
@@ -459,6 +468,7 @@ const PLUMBING_PROFILE: BusinessProfile = {
         "No worries! Flick us a DM with the details and we'll get a plumber out to you{link_suffix}",
         "We can definitely help with that! Send us a message with your suburb and we'll get it sorted{link_suffix}",
         "Sounds like something we can fix — shoot us a DM and we'll organise a time{link_suffix}",
+        "We deal with this stuff all the time — pop us a message and we'll get it sorted for you{link_suffix}",
       ],
     },
     {
@@ -466,6 +476,7 @@ const PLUMBING_PROFILE: BusinessProfile = {
       templates: [
         "Hey! Pricing depends on the job — drop us a DM with the details and we'll give you a proper quote{link_suffix}",
         "Yep, happy to help! Flick us a message with what's going on and we'll sort out pricing{link_suffix}",
+        "Good question! Every job's a bit different — send us a DM with the details and we'll get you an accurate price{link_suffix}",
       ],
     },
     {
@@ -473,6 +484,7 @@ const PLUMBING_PROFILE: BusinessProfile = {
       templates: [
         "We'd love to help! Pop us a DM with the details and we'll get a quote to you{link_suffix}",
         "No worries — shoot us a message with the details and we'll quote it up for you{link_suffix}",
+        "Yep! Flick us a DM with what you need and we'll have a quote sorted in no time{link_suffix}",
       ],
     },
     {
@@ -480,6 +492,7 @@ const PLUMBING_PROFILE: BusinessProfile = {
       templates: [
         "Awesome! Flick us a DM with your suburb and we'll get a plumber out to you ASAP{link_suffix}",
         "No dramas! Send us a message and we'll lock in a time that works{link_suffix}",
+        "Yep, we can get someone out to you! Pop us a DM with your suburb and preferred time{link_suffix}",
       ],
     },
     {
@@ -487,6 +500,7 @@ const PLUMBING_PROFILE: BusinessProfile = {
       templates: [
         "Thanks for reaching out! Shoot us a DM and we'll help you out{link_suffix}",
         "Yep, we can definitely help with that! Send us a message for more info{link_suffix}",
+        "Yep, that's right up our alley! Flick us a DM and we'll sort you out{link_suffix}",
       ],
     },
     {
@@ -500,12 +514,21 @@ const PLUMBING_PROFILE: BusinessProfile = {
   dmTemplates: {
     support_request: [
       "Hey {name}! Thanks for reaching out. To help us get the right plumber to you quickly, can you let us know:\n\n- What's the issue? (e.g. blocked drain, leaking tap, hot water)\n- How urgent is it? (emergency / can wait a day or two)\n- Your suburb?\n\nWe'll get back to you ASAP!",
+      "Hey {name}! We can definitely help with that. A couple of quick questions so we can get the right person to you:\n\n- Can you describe what's happening?\n- Your suburb?\n- Is it a house, unit, or commercial?\n\nWe'll be in touch shortly!",
     ],
     quote_request: [
       "Hey {name}! We'd love to quote on that for you. A few quick details:\n\n- What work do you need done?\n- Your suburb?\n- Is it a house, unit, or commercial?\n\nWe'll get a quote sorted for you shortly!",
+      "Hey {name}! Happy to get you a quote. To make sure it's accurate, can you let us know:\n\n- What's the job? (rough description is fine)\n- Where are you located?\n\nWe'll get back to you with numbers ASAP!",
     ],
     booking_request: [
       "Hey {name}! Great to hear you'd like to book in a plumber. What days/times work best? We service most of {service_areas} and can usually get someone out within 24-48 hours.",
+      "Hey {name}! We can get someone out to you — what suburb are you in and when suits? We'll lock in a time.",
+    ],
+    pricing_request: [
+      "Hey {name}! Good question on pricing — every job's a bit different so we want to give you an accurate number. Can you let us know:\n\n- What's the job?\n- Your suburb?\n\nWe'll get a price to you quickly!",
+    ],
+    lead_interest: [
+      "Hey {name}! Thanks for your interest. We'd love to help — can you tell us a bit more about what you need? We service most of {service_areas}.",
     ],
     default: [
       "Hey {name}! Thanks for reaching out to {business_name}. How can we help you today?",

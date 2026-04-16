@@ -58,12 +58,17 @@ const STRONG_LEAD_PATTERNS: Array<{
   confidence: number;
   reasoning: string;
 }> = [
-  // Pricing / Cost
+  // Pricing / Cost (including Aussie informal)
   {
     patterns: [
-      /\b(price|pricing|how much|cost|rate|rates|fee|fees|charge)\b/i,
+      /\b(price|pricing|how much|cost|rate|rates|fee|fees|charge|charges)\b/i,
       /^\$?\d+\s*\??$/,  // Just a number with question mark
-      /\bwhat('s| is| are) (the |your )?(price|cost|rate|fee)/i,
+      /\bwhat('s| is| are| do) (the |your |you )?(price|cost|rate|fee|charge)/i,
+      /\bhow much (does|do|would|will|is|for|to)\b/i,
+      /\bwhat (does|would|will) (it|that|this) cost/i,
+      /\bball\s*park\s*(figure|price|cost)?\b/i,
+      /\brough\s*(price|cost|idea|estimate)\b/i,
+      /\bgive\s+(us|me)\s+(a\s+)?(price|cost|idea)\b/i,
     ],
     classification: "pricing_request",
     confidence: 0.95,
@@ -75,32 +80,45 @@ const STRONG_LEAD_PATTERNS: Array<{
       /\b(quote|estimate|ballpark)\b/i,
       /\bfree quote\b/i,
       /\bget a quote\b/i,
-      /\bquote (me|us|please)\b/i,
+      /\bquote (me|us|please|pls)\b/i,
+      /\bcan (you|I|we) get\s+(a\s+)?(quote|price)/i,
     ],
     classification: "quote_request",
     confidence: 0.95,
     reasoning: "Explicit quote request",
   },
-  // Booking
+  // Booking / Scheduling (expanded Aussie patterns)
   {
     patterns: [
       /\b(book|booking|schedule|appointment)\b/i,
-      /\bcome (out|over|to)\b/i,
-      /\bcan (you|someone) come\b/i,
+      /\bcome (out|over|to|round|around)\b/i,
+      /\bcan (you|someone|anybody|anyone|a tech|a tradie|a plumber|a sparky) come\b/i,
       /\bavailab(le|ility)\b/i,
+      /\bwhen (can|could) (you|someone) (come|get here|make it)\b/i,
+      /\bgot\s+(any\s+)?(availability|spots|openings)\b/i,
+      /\bfirst available\b/i,
+      /\bnext available\b/i,
+      /\bcan you (get|send) (someone|a guy|a tech|a plumber|a sparky) (out|over|round)/i,
+      /\bsend (someone|a guy|a tech|a plumber|a sparky)\b/i,
     ],
     classification: "booking_request",
     confidence: 0.90,
     reasoning: "Booking or availability request",
   },
-  // Direct interest
+  // Direct interest (expanded)
   {
     patterns: [
       /\binterested\b/i,
       /\bi('m| am) interested\b/i,
-      /\byes please\b/i,
+      /\byes (please|pls|mate|absolutely)\b/i,
       /\bsign me up\b/i,
       /\bcount me in\b/i,
+      /\byep\s*(,?\s*(please|interested|keen|i'd like))/i,
+      /\bkeen\b/i,
+      /\bi('m| am) keen\b/i,
+      /\bhow do (i|we) (get|go about|start|sign up|book)/i,
+      /\bwhere do (i|we) sign up\b/i,
+      /\byes\s*!+\s*$/i,
     ],
     classification: "lead_interest",
     confidence: 0.90,
@@ -115,39 +133,51 @@ const STRONG_LEAD_PATTERNS: Array<{
       /\bmessage sent\b/i,
       /\bsent (a )?message\b/i,
       /\binbox(ed)?\b/i,
+      /\bcheck (your|ya|ur) (inbox|dm|pm|messages)\b/i,
+      /\bjust (dm|message|inbox)(ed|'d)? (you|the page)\b/i,
     ],
     classification: "lead_interest",
     confidence: 0.85,
     reasoning: "Request for DM or notification of message",
   },
-  // Service need
+  // Service need (much expanded — covers trades generically + specific)
   {
     patterns: [
       /\bneed\s+(a |an )?(aircon|air con|air conditioning|hvac|split|ducted|ac)\b/i,
-      /\bneed\s+(a |an )?(repair|service|install|maintenance|quote)\b/i,
-      /\blooking for\s+(a |an )?(aircon|plumber|electrician|hvac)\b/i,
-      /\bwant\s+(a |an )?(new|split|ducted)\b/i,
+      /\bneed\s+(a |an )?(repair|service|install|maintenance|quote|plumber|electrician|sparky|tradie)\b/i,
+      /\blooking for\s+(a |an )?(good |reliable |local )?(aircon|plumber|electrician|hvac|tradie|sparky)\b/i,
+      /\bwant\s+(a |an |to get a )?(new|split|ducted)\b/i,
+      /\banyone (recommend|know|suggest).{0,30}(plumber|electrician|aircon|tradie|sparky)/i,
+      /\bcan anyone (recommend|suggest)\b/i,
+      /\bwho (do you|would you|can you) recommend\b/i,
+      /\bknow\s+(a\s+)?(good|reliable|local)\s+(plumber|electrician|tradie|sparky)\b/i,
+      /\bgot\s+(a\s+)?(problem|issue|drama)\s+(with|in)\b/i,
     ],
     classification: "lead_interest",
     confidence: 0.90,
     reasoning: "Explicit service need",
   },
-  // Spam patterns
+  // Spam patterns (expanded)
   {
     patterns: [
-      /\b(click here|buy now|free money|crypto|bitcoin|forex)\b/i,
-      /\b(earn \$|make money|work from home|mlm)\b/i,
-      /https?:\/\/(?!book\.servicem8|facebook\.com)/i,  // External links (not ServiceM8 or Facebook)
+      /\b(click here|buy now|free money|crypto|bitcoin|forex|nft)\b/i,
+      /\b(earn \$|make money|work from home|mlm|passive income)\b/i,
+      /https?:\/\/(?!book\.servicem8|facebook\.com|messenger\.com)/i,
+      /\b(check my profile|link in bio|follow me|subscribe)\b/i,
+      /\b(I made|I earned)\s+\$\d/i,
+      /\b(weight loss|lose \d+ kg|diet pill|supplement)\b/i,
     ],
     classification: "spam",
     confidence: 0.90,
     reasoning: "Spam pattern detected",
   },
-  // Complaint
+  // Complaint (expanded)
   {
     patterns: [
-      /\b(terrible|awful|worst|horrible|rip ?off|scam|never again)\b/i,
-      /\b(waste of|don't bother|stay away|avoid)\b/i,
+      /\b(terrible|awful|worst|horrible|rip ?off|scam|never again|disgraceful|pathetic)\b/i,
+      /\b(waste of|don't bother|stay away|avoid|wouldn't recommend)\b/i,
+      /\b(ripped off|been waiting|no one called|didn't show|didn't turn up|stood up|never came)\b/i,
+      /\b(useless|hopeless|shocking|appalling)\b/i,
     ],
     classification: "complaint",
     confidence: 0.85,
@@ -167,41 +197,110 @@ const WEAK_LEAD_PATTERNS: Array<{
       /\binfo\b/i,
       /\bmore (info|details|information)\b/i,
       /\btell me more\b/i,
+      /\bcan (you|I) (get|have) more (info|details)/i,
+      /\bwhat('s| are) (your |the )?(details|info)\b/i,
     ],
     classification: "lead_interest",
     confidence: 0.70,
     reasoning: "Information request — moderate lead signal",
   },
-  // Service area questions
+  // Service area questions (strong implicit interest)
   {
     patterns: [
-      /\bdo you (service|cover|come to)\b/i,
+      /\bdo you (service|cover|come to|do work in|go to)\b/i,
       /\bwhat area/i,
-      /\b(service|cover)\s+(my |the )?(area|suburb|region)\b/i,
+      /\b(service|cover)\s+(my |the )?(area|suburb|region|side)\b/i,
+      /\bdo you come to\b/i,
+      /\bare you (in|near|around|close to)\b/i,
+      /\bwhat suburbs?\b/i,
+      /\bdo you (work|operate) (in|around|near)\b/i,
+    ],
+    classification: "lead_interest",
+    confidence: 0.78,
+    reasoning: "Service area inquiry — implicit buying intent",
+  },
+  // Support / existing customer (expanded)
+  {
+    patterns: [
+      /\bnot (working|cooling|heating|draining|flushing)\b/i,
+      /\b(broken|leaking|noisy|smelly|blocked|clogged)\b/i,
+      /\bwarranty\b/i,
+      /\bstopped working\b/i,
+      /\b(keeps|keep) (tripping|leaking|dripping|breaking|shutting off)\b/i,
+      /\bmakes? (a |weird |loud |strange )?(noise|sound)\b/i,
+    ],
+    classification: "support_request",
+    confidence: 0.78,
+    reasoning: "Support or repair need",
+  },
+  // Timing/availability questions (implicit booking intent)
+  {
+    patterns: [
+      /\bopen (on )?(saturday|sunday|weekend|public holiday)/i,
+      /\bdo you (work|do) (weekend|saturday|sunday|after hours|evening)/i,
+      /\b(after hours|24.?hr|24.?hour|emergency)\s*(service|call)/i,
+      /\bhow (long|quick|soon|fast)\b/i,
+      /\bwhat('s| is| are) (your |the )?(wait|turnaround|lead) (time|list)/i,
+    ],
+    classification: "lead_interest",
+    confidence: 0.72,
+    reasoning: "Timing/availability question — implicit interest",
+  },
+  // "Do you do X?" questions (service inquiry)
+  {
+    patterns: [
+      /\bdo you (guys |also )?(do|offer|provide|handle|fix|repair|install)\b/i,
+      /\bcan you (do|fix|repair|install|help with|handle)\b/i,
+      /\bdo you (sell|stock|supply|carry)\b/i,
     ],
     classification: "lead_interest",
     confidence: 0.75,
-    reasoning: "Service area inquiry",
+    reasoning: "Service capability question — pre-purchase signal",
   },
-  // Support / existing customer
+  // Payment/finance questions (buying signal)
   {
     patterns: [
-      /\bnot (working|cooling|heating)\b/i,
-      /\b(broken|leaking|noisy)\b/i,
-      /\bwarranty\b/i,
+      /\b(payment plan|pay later|afterpay|zip pay|finance|lay.?by)\b/i,
+      /\bdo you (take|accept) (cards?|eftpos|credit)/i,
+      /\bcan (i|we) pay (in|by)\b/i,
     ],
-    classification: "support_request",
-    confidence: 0.75,
-    reasoning: "Support or repair need",
+    classification: "lead_interest",
+    confidence: 0.80,
+    reasoning: "Payment inquiry — strong buying signal",
   },
 ];
 
 // Non-lead patterns (high confidence skip)
 const NON_LEAD_PATTERNS: RegExp[] = [
-  /^(lol|haha|nice|great|awesome|love it|beautiful|wow|omg|😂|👍|❤️|🔥|💯)+$/i,
+  // Pure reactions / engagement
+  /^[\s!?.]*$/,  // Empty or just punctuation
+  /^(lol|haha|hahaha|nice|great|awesome|love it|beautiful|wow|omg|so good|yay|amazing)+[!\s]*$/i,
+  /^[😂👍❤️🔥💯👏🙌💪😍🤩😎🥳🎉✨]+\s*$/,  // Emoji-only
   /^(tag|tagging|@)\s/i,
-  /^@\w+\s*$/,  // Just tagging someone
+  /^@\w+[\s,]*(@\w+[\s,]*)*$/,  // Just tagging people
   /^(shared|sharing)\b/i,
+  // Social responses that aren't service-related
+  /^(good (on|for) (you|them|ya)|well done|congrats|congratulations|happy (birthday|anniversary)|rip|condolences)[!\s]*$/i,
+  // Competitor/promo for other businesses
+  /\bI (can|could) (do|fix) (it|that|this) for (less|cheaper|half)\b/i,
+  // Arguments / off-topic debates
+  /^(that's|thats) (not true|wrong|bs|bullshit)\b/i,
+];
+
+// Abusive patterns — handle with care, don't auto-reply
+const ABUSIVE_PATTERNS: RegExp[] = [
+  /\b(f+u+c+k+|sh+i+t+|c+u+n+t+|a+ss+h+o+l+e+|d+i+c+k+h+e+a+d+)\b/i,
+  /\b(kill yourself|kys|go die)\b/i,
+  /\b(racist|sexist|homo|fag|retard)\b/i,
+];
+
+// Competitor/self-promotion patterns
+const COMPETITOR_PATTERNS: RegExp[] = [
+  /\b(we|our company|my business|our team) (also |can )?do (the same|that|this)/i,
+  /\b(try|use|call|contact) @?\w+ instead\b/i,
+  /\b(I'm|im|we're|i am) (a |an )?(plumber|electrician|tradie|sparky|hvac tech)\b/i,
+  /\bmy (mate|friend|brother|cousin).{0,20}(plumber|electrician|tradie|sparky|business)/i,
+  /\bhire\s+my\b/i,
 ];
 
 // ============================================
@@ -264,7 +363,21 @@ function classifyByRules(text: string, profile?: BusinessProfile): RuleMatch | n
     return { classification: "non_lead", confidence: 0.95, reasoning: "Too short to be a lead signal" };
   }
 
-  // Check non-lead patterns first
+  // Check for abusive content — classify but don't auto-reply
+  for (const pattern of ABUSIVE_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return { classification: "non_lead", confidence: 0.98, reasoning: "Abusive content detected — do not engage" };
+    }
+  }
+
+  // Check for competitor/self-promotion comments
+  for (const pattern of COMPETITOR_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return { classification: "non_lead", confidence: 0.92, reasoning: "Competitor or self-promotion — ignore" };
+    }
+  }
+
+  // Check non-lead patterns
   for (const pattern of NON_LEAD_PATTERNS) {
     if (pattern.test(trimmed)) {
       return { classification: "non_lead", confidence: 0.95, reasoning: "Non-lead reaction or tag" };
@@ -340,33 +453,45 @@ function buildClassificationPrompt(businessContext?: {
     ? `\n\nIndustry-specific intents to look for:\n${profile.commonIntents.map((i) => `- "${i.key}": ${i.label}`).join("\n")}`
     : "";
 
-  return `You are a comment classifier for ${bizName} (${bizDesc}) Facebook page.${categories}${intentHints}
+  return `You are an expert comment classifier for ${bizName} (${bizDesc}), an Australian service business Facebook page.${categories}${intentHints}
 
-Analyze the comment and return a JSON object:
+Your job: determine if a Facebook comment represents a potential customer lead, and if so, what kind.
 
+Return a JSON object:
 {
   "classification": one of: "lead_interest", "pricing_request", "quote_request", "booking_request", "spam", "complaint", "support_request", "non_lead", "unclear",
   "confidence": 0.0 to 1.0,
-  "is_lead_signal": true/false - whether this person might become a customer,
+  "is_lead_signal": true/false,
   "service_type": specific service mentioned or null,
-  "location": suburb/area mentioned or null,
+  "location": suburb/area/postcode mentioned or null,
   "urgency": "low" | "normal" | "high" | "emergency" or null,
-  "reasoning": brief explanation of classification
+  "reasoning": brief explanation
 }
 
-Classification guide:
-- "lead_interest": shows interest in services, wants info, mentions need
-- "pricing_request": asking about cost/price/fees
-- "quote_request": asking for a quote or estimate
-- "booking_request": wants to book, schedule, or have someone come out
-- "spam": promotional, unrelated, or spam content
-- "complaint": expressing dissatisfaction
-- "support_request": existing customer needing help/repair
-- "non_lead": social engagement only (likes, tags, reactions, general chat)
-- "unclear": can't determine intent confidently
+CLASSIFICATION RULES:
+- "lead_interest": shows interest, asks about services, mentions a need, asks "do you do X?", "what areas?", "are you available?", payment/finance questions
+- "pricing_request": asking about cost/price/fees/rates — "how much", "what's it cost", "ballpark price"
+- "quote_request": explicitly asking for a quote or estimate
+- "booking_request": wants to book/schedule/have someone come out — "can you come", "available this week", "when can you get here"
+- "spam": promotional, crypto, MLM, unrelated links, self-promotion
+- "complaint": expressing dissatisfaction with the business specifically
+- "support_request": existing customer with an issue — something is broken/leaking/not working. If someone describes a problem (blocked drain, burst pipe, no hot water, AC broken), this IS a lead even if it sounds like support — they need the service.
+- "non_lead": social engagement only — emoji reactions, tagging friends, general praise with no service interest, congratulations, off-topic chat, arguments
+- "unclear": genuinely can't determine intent
 
-Lead signals include any comment suggesting the person might want the services this business offers.
-Non-leads include: emoji-only reactions, tagging friends, general praise without service interest, unrelated discussion.
+IMPORTANT NUANCES FOR AUSTRALIAN TRADES BUSINESSES:
+- "Interested!" or "Keen!" on a post = lead_interest (0.90)
+- "Do you come to [suburb]?" = lead_interest (0.80) — they're checking before hiring
+- Describing a problem (e.g. "my drain is blocked", "hot water isn't working") = support_request with is_lead_signal: true — they NEED the service
+- "Can someone come out?" / "Send someone" = booking_request (0.90)
+- Questions about opening hours, weekend availability, after-hours = lead_interest (0.75)
+- Tagging a friend with "@name check this out" = non_lead UNLESS they also describe a need
+- "How much for..." = pricing_request (0.95)
+- Pure emoji responses (👍, ❤️, 🔥) = non_lead (0.95)
+- Competitors self-promoting ("I can do it cheaper", "try my mate's business") = non_lead (0.92)
+- Abusive/vulgar comments = non_lead (0.98)
+
+A comment that describes a PROBLEM (leak, blockage, broken thing, no power, etc.) is ALWAYS a lead signal because they need the service, even if they don't explicitly ask for help.
 
 Return ONLY valid JSON.`;
 }

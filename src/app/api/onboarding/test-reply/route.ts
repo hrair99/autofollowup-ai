@@ -9,8 +9,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { getUserBusinessId, loadBusinessSettings } from "@/lib/business/resolve";
 import { classifyComment } from "@/lib/ai/commentClassifier";
-import { getTemplateReply, generateAiPublicReply } from "@/lib/meta/publicReplies";
-import { getBusinessProfile } from "@/lib/business/profiles";
+import { getTemplateReply, generateAiPublicReply, generateAiDmReply } from "@/lib/meta/publicReplies";
+import { getBusinessProfile, getProfileDmTemplate } from "@/lib/business/profiles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +44,9 @@ export async function POST(req: NextRequest) {
   ]);
 
   const businessName = (settings as any)?.business_name || "Your Business";
+  const serviceAreas = (settings as any)?.service_areas || profile.defaultServiceAreas || [];
+  const enquiryFormUrl = (settings as any)?.enquiry_form_url || undefined;
+  const tone = (settings as any)?.ai_tone || profile.defaultTone;
 
   // Classify the comment
   const classification = await classifyComment(comment, {
@@ -56,38 +59,68 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // Generate public reply
+  // Generate AI public reply (with entities for smarter context)
   let publicReply = await generateAiPublicReply(comment, {
     classification: classification.classification,
     businessName,
-    enquiryFormUrl: (settings as any)?.enquiry_form_url || undefined,
-    tone: (settings as any)?.ai_tone || profile.defaultTone,
+    enquiryFormUrl,
+    tone,
     serviceType: classification.service_type || undefined,
-    serviceAreas: (settings as any)?.service_areas || profile.defaultServiceAreas,
+    serviceAreas,
     location: classification.location || undefined,
     urgency: classification.urgency || undefined,
     profile,
+    entities: classification.entities,
+    commenterName: undefined, // No commenter name in test mode
   });
 
   if (!publicReply) {
     publicReply = getTemplateReply(classification.classification, {
-      enquiryFormUrl: (settings as any)?.enquiry_form_url || undefined,
+      enquiryFormUrl,
       businessName,
       profile,
     });
   }
 
-  // Generate DM preview
-  const dmTemplates = profile.dmTemplates[classification.classification] || profile.dmTemplates["default"] || [];
-  let dmPreview = dmTemplates.length > 0
-    ? dmTemplates[Math.floor(Math.random() * dmTemplates.length)]
-    : `Hey! Thanks for reaching out to ${businessName}. How can we help you today?`;
+  // Generate AI DM preview (much smarter than templates)
+  let dmPreview = await generateAiDmReply(comment, {
+    classification: classification.classification,
+    businessName,
+    commenterName: "Customer", // Placeholder for test mode
+    enquiryFormUrl,
+    tone,
+    serviceAreas,
+    urgency: classification.urgency || undefined,
+    profile,
+    entities: classification.entities,
+  });
 
-  // Replace placeholders
-  dmPreview = dmPreview
-    .replace(/\{name\}/g, "Customer")
-    .replace(/\{business_name\}/g, businessName)
-    .replace(/\{service_areas\}/g, ((settings as any)?.service_areas || profile.defaultServiceAreas || []).join(", "));
+  // Fall back to template if AI DM fails
+  if (!dmPreview) {
+    let template = getProfileDmTemplate(classification.classification, profile);
+    dmPreview = template
+      .replace(/\{name\}/g, "Customer")
+      .replace(/\{business_name\}/g, businessName)
+      .replace(/\{service_areas\}/g, serviceAreas.join(", "));
+  }
+
+  // Determine what would happen in production
+  const isLead = classification.is_lead_signal;
+  const confidence = classification.confidence;
+  const confidenceTier = confidence >= 0.85 ? "high" : confidence >= 0.60 ? "safe" : "low";
+  const wouldAutoReply = confidence >= 0.60 && isLead;
+
+  // Build a human-readable explanation of what would happen
+  let actionExplanation = "";
+  if (!isLead) {
+    actionExplanation = "This comment wouldn't trigger any action — it doesn't look like a lead.";
+  } else if (confidenceTier === "high") {
+    actionExplanation = "This comment would get an automatic public reply AND a private DM — high confidence lead.";
+  } else if (confidenceTier === "safe") {
+    actionExplanation = "This comment would get an automatic public reply AND a private DM — moderate confidence.";
+  } else {
+    actionExplanation = "This comment would be logged as a potential lead but NOT auto-replied (low confidence). You'd see it in your alerts for manual review.";
+  }
 
   return NextResponse.json({
     classification: {
@@ -100,7 +133,8 @@ export async function POST(req: NextRequest) {
     entities: classification.entities,
     publicReply,
     dmPreview,
-    wouldAutoReply: classification.confidence >= 0.60 && classification.is_lead_signal,
-    confidenceTier: classification.confidence >= 0.85 ? "high" : classification.confidence >= 0.60 ? "safe" : "low",
+    wouldAutoReply,
+    confidenceTier,
+    actionExplanation,
   });
 }

@@ -9,7 +9,7 @@ import type { CommentClassificationResult } from "../ai/commentClassifier";
 import { decideCommentAction } from "./commentDecisionEngine";
 import type { CommentAction, CommentDecision } from "./commentDecisionEngine";
 import { sendPrivateReply, buildPrivateReplyMessage } from "../meta/privateReplies";
-import { postPublicReply, likeComment, getTemplateReply, generateAiPublicReply } from "../meta/publicReplies";
+import { postPublicReply, likeComment, getTemplateReply, generateAiPublicReply, generateAiDmReply } from "../meta/publicReplies";
 import { findOrCreateCommentLead, enrichLeadFromComment, hasUserReceivedPrivateReply } from "../leads/matching";
 import type { NormalizedWebhookEvent, Settings } from "../types";
 import { classifyByRules, shouldSkipAi } from "./rulesClassifier";
@@ -424,13 +424,28 @@ async function executeAction(
 
   switch (action) {
     case "send_private_reply": {
-      // Build private reply message
-      const privateMessage = buildPrivateReplyMessage({
-        businessName: settings.business_name || "our team",
-        enquiryFormUrl: settings.enquiry_form_url,
+      // Try AI-generated DM first, fall back to template
+      let privateMessage = await generateAiDmReply(text, {
         classification: classification.classification,
-        customTemplate: settings.private_reply_templates?.[0] || null,
+        businessName: settings.business_name || "our team",
+        commenterName: undefined, // Will be enriched if we have it
+        enquiryFormUrl: settings.enquiry_form_url,
+        tone: settings.ai_tone,
+        serviceAreas: settings.service_areas || ctx.profile?.defaultServiceAreas,
+        urgency: classification.urgency || undefined,
+        profile: ctx.profile,
+        entities: classification.entities,
       });
+
+      if (!privateMessage) {
+        // Fall back to template-based message
+        privateMessage = buildPrivateReplyMessage({
+          businessName: settings.business_name || "our team",
+          enquiryFormUrl: settings.enquiry_form_url,
+          classification: classification.classification,
+          customTemplate: settings.private_reply_templates?.[0] || null,
+        });
+      }
 
       // Send private reply
       const result = await sendPrivateReply(commentId, privateMessage, pageId, pageToken);
@@ -460,12 +475,27 @@ async function executeAction(
 
         // Also post a brief public reply to show engagement
         if (settings.public_reply_enabled) {
-          const publicReply = getTemplateReply(classification.classification, {
+          let publicReply = await generateAiPublicReply(text, {
+            classification: classification.classification,
+            businessName: settings.business_name || "our team",
             enquiryFormUrl: settings.enquiry_form_url,
-            customTemplates: settings.comment_reply_templates,
-            businessName: settings.business_name || undefined,
+            tone: settings.ai_tone,
+            serviceType: classification.service_type || undefined,
+            serviceAreas: settings.service_areas,
+            location: classification.location || undefined,
+            urgency: classification.urgency || undefined,
             profile,
+            entities: classification.entities,
           });
+
+          if (!publicReply) {
+            publicReply = getTemplateReply(classification.classification, {
+              enquiryFormUrl: settings.enquiry_form_url,
+              customTemplates: settings.comment_reply_templates,
+              businessName: settings.business_name || undefined,
+              profile,
+            });
+          }
 
           const publicResult = await postPublicReply(commentId, publicReply, pageId, pageToken);
           if (publicResult.success) {
@@ -586,6 +616,7 @@ async function executePublicReply(
     location: classification.location || undefined,
     urgency: classification.urgency || undefined,
     profile: ctxProfile,
+    entities: classification.entities,
   });
 
   if (!replyText) {

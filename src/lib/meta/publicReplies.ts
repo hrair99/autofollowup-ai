@@ -177,6 +177,8 @@ export async function generateAiPublicReply(
     location?: string;
     urgency?: string;
     profile?: BusinessProfile;
+    entities?: Record<string, string>;
+    commenterName?: string;
   }
 ): Promise<string | null> {
   const {
@@ -189,29 +191,39 @@ export async function generateAiPublicReply(
     location,
     urgency,
     profile,
+    entities,
+    commenterName,
   } = options;
 
   const voiceTone = tone || profile?.defaultTone || "friendly Australian";
   const areas = serviceAreas?.length ? serviceAreas : profile?.defaultServiceAreas || [];
+  const firstName = commenterName?.split(" ")[0];
 
-  // Build context about what we know
+  // Build rich context about what we know from classification + entities
   const contextParts: string[] = [];
-  if (serviceType) contextParts.push(`They're asking about: ${serviceType}`);
-  if (location) contextParts.push(`Location mentioned: ${location}`);
-  if (urgency === "high" || urgency === "emergency") {
-    contextParts.push("This seems urgent — acknowledge that");
+  if (serviceType) contextParts.push(`Service asked about: ${serviceType}`);
+  if (entities?.issue_type) contextParts.push(`Specific issue: ${entities.issue_type}`);
+  if (entities?.service_type) contextParts.push(`System/service type: ${entities.service_type}`);
+  if (entities?.job_type) contextParts.push(`Job type: ${entities.job_type}`);
+  if (entities?.property_type) contextParts.push(`Property: ${entities.property_type}`);
+  if (entities?.callback_intent) contextParts.push(`They ${entities.callback_intent}`);
+  if (location) contextParts.push(`Location: ${location}`);
+  if (urgency === "emergency") {
+    contextParts.push("URGENT/EMERGENCY — acknowledge this immediately, show empathy, reassure them");
+  } else if (urgency === "high") {
+    contextParts.push("This is urgent — acknowledge the urgency naturally");
   }
   if (areas.length) {
-    contextParts.push(`We service: ${areas.join(", ")}`);
+    contextParts.push(`Service areas: ${areas.join(", ")}`);
   }
   if (profile?.industryLabel) {
     contextParts.push(`Industry: ${profile.industryLabel}`);
   }
   if (profile?.serviceCategories?.length) {
-    contextParts.push(`Services: ${profile.serviceCategories.slice(0, 5).join(", ")}`);
+    contextParts.push(`Our services include: ${profile.serviceCategories.slice(0, 6).join(", ")}`);
   }
   const contextBlock = contextParts.length > 0
-    ? `\nContext:\n${contextParts.map((c) => `- ${c}`).join("\n")}\n`
+    ? `\nWhat we know about this comment:\n${contextParts.map((c) => `- ${c}`).join("\n")}\n`
     : "";
 
   // Banned phrases instruction
@@ -219,46 +231,241 @@ export async function generateAiPublicReply(
     ? `\nNEVER use these phrases: ${profile.bannedPhrases.map((p) => `"${p}"`).join(", ")}\n`
     : "";
 
-  const systemPrompt = `You are a ${voiceTone} social media assistant for ${businessName}.
-Write a short, natural public reply to a Facebook comment.
+  // Build urgency-aware tone instructions
+  let urgencyTone = "";
+  if (urgency === "emergency") {
+    urgencyTone = `\nURGENCY INSTRUCTIONS: This is an emergency. Lead with empathy ("That sounds stressful" / "We know that's not fun"). Reassure them you can help fast. Use "we'll get someone to you" language. Don't be overly casual — match their stress level.`;
+  } else if (urgency === "high") {
+    urgencyTone = `\nURGENCY INSTRUCTIONS: This is somewhat urgent. Acknowledge it naturally and move to action quickly.`;
+  }
 
-VOICE & TONE:
-- Australian casual-professional: "Yep", "No worries", "Flick us a message", "We'll sort you out"
-- Warm and helpful but not over-the-top
-- Sound like a real person, not a robot
-- Never use hashtags or emojis
-- Keep it to 1-2 sentences maximum
+  // Classification-specific reply guidance
+  const classGuidance: Record<string, string> = {
+    pricing_request: "They want pricing. Acknowledge this directly. Don't dodge — say you'd love to help with pricing but need a few details. Invite them to DM.",
+    quote_request: "They want a quote. Be enthusiastic about quoting. Tell them to DM details so you can give them an accurate one.",
+    booking_request: "They want to book/schedule. Confirm you can help, show eagerness. Direct them to DM or booking link.",
+    lead_interest: "They've shown interest in your services. Confirm you offer what they need. Guide them to DM for next steps.",
+    support_request: "They have an existing issue or need a fix. Show empathy first, then guide to DM for fast help.",
+    complaint: "They're unhappy. DON'T be defensive. Apologise sincerely, take responsibility, ask them to DM so you can make it right. Keep it professional.",
+    spam: "This looks like spam. Respond briefly and professionally. Don't engage with the spam content.",
+  };
+  const guidance = classGuidance[classification] || "Respond helpfully and guide them to DM.";
 
-RULES:
-- Acknowledge what they said specifically (don't be generic)
-- Direct them to DM the page or use the enquiry form
-- Do NOT promise specific pricing, availability, or timelines
-- Do NOT mention competitors
-- If the comment mentions a specific service or location, reference it naturally
-- If it's urgent, acknowledge the urgency
-${enquiryFormUrl ? `- Include this link if natural to do so: ${enquiryFormUrl}` : "- Direct them to send the page a message"}
+  const systemPrompt = `You are writing a public Facebook comment reply for ${businessName}${profile?.industryLabel ? ` (${profile.industryLabel})` : ""}.
+
+YOUR GOAL: Write a reply that makes this person feel heard and moves them to DM the page.
+
+VOICE:
+- ${voiceTone}
+- Australian casual but professional: "Yep", "No worries", "Flick us a message", "We'll sort you out", "No dramas", "We'll get you sorted"
+- Sound like a real human who works at this business — NOT a chatbot
+- Match the energy of the comment. If they're stressed, be reassuring. If they're casual, be casual.
+- NEVER use hashtags, emojis, or corporate jargon
+- 1-2 sentences MAXIMUM. Short is better. Real businesses don't write essays in comments.
+${firstName ? `- Address them by name if natural: "${firstName}"` : ""}
+${urgencyTone}
+
+REPLY STRATEGY:
+- ${guidance}
+- Reference the SPECIFIC thing they mentioned (the service, issue, or situation) — don't give a generic reply
+- End with a clear call-to-action: DM the page${enquiryFormUrl ? ` or use this link: ${enquiryFormUrl}` : ""}
+- NEVER promise specific pricing, availability, or timelines
+- NEVER mention competitors or other businesses
+- NEVER start with "Hi there!" or "Hello!" — too formal. Use "Hey", "Hey ${firstName || "mate"}", or just jump in.
+
 ${bannedBlock}
-The comment was classified as: ${classification}
-${contextBlock}`;
+${contextBlock}
+
+EXAMPLES OF GOOD REPLIES (for reference, don't copy exactly):
+- "Yep we can definitely help with that! Flick us a DM with your suburb and we'll get a quote sorted."
+- "Hey ${firstName || "mate"}! That sounds like something we can sort out — shoot us a message with the details."
+- "No worries at all! We do that all the time. Pop us a DM and we'll get you booked in."
+- "That's no fun! Send us a message with your address and we'll get someone out to you ASAP."
+
+EXAMPLES OF BAD REPLIES (avoid these):
+- "Thank you for your inquiry. We would be happy to assist you." (too corporate)
+- "Hi there! We appreciate you reaching out to us." (too formal)
+- "We offer a wide range of services..." (too generic/salesy)
+- Long replies with multiple sentences explaining your services (too much)`;
 
   const reply = await groqChat(
     [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `Comment: "${commentText}"\n\nYour reply (1-2 sentences, natural tone):` },
+      { role: "user", content: `Facebook comment: "${commentText}"\n\nWrite your reply (1-2 sentences, casual Aussie tone):` },
     ],
-    { maxTokens: 100, temperature: 0.7 }
+    { maxTokens: 120, temperature: 0.6 }
   );
 
   // Clean up any quotes the AI might have wrapped the reply in
   if (reply) {
-    const cleaned = reply.replace(/^["']|["']$/g, "").trim();
+    let cleaned = reply.replace(/^["']|["']$/g, "").trim();
+    // Remove any "Reply:" or "Response:" prefix the AI might add
+    cleaned = cleaned.replace(/^(Reply|Response|Comment|Answer):\s*/i, "");
+    // Remove emoji that might slip through
+    cleaned = cleaned.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").trim();
     // Safety check: verify no banned phrases slipped through
     if (profile && containsBannedPhrase(cleaned, profile)) {
       console.warn("[PublicReply] AI reply contained banned phrase, falling back to template");
       return null; // Caller should fall back to template
     }
+    // Verify length — if AI went too long, truncate to last complete sentence
+    if (cleaned.length > 280) {
+      const sentences = cleaned.match(/[^.!?]+[.!?]+/g) || [cleaned];
+      cleaned = sentences.slice(0, 2).join(" ").trim();
+    }
     return cleaned;
   }
 
   return reply;
+}
+
+/**
+ * Generate an AI-powered DM (private message) that's contextual and smart.
+ * Much better than static templates — references the specific issue and asks
+ * the right qualifying questions for the industry.
+ */
+export async function generateAiDmReply(
+  commentText: string,
+  options: {
+    classification: CommentClassification;
+    businessName: string;
+    commenterName?: string;
+    enquiryFormUrl?: string | null;
+    tone?: string;
+    serviceType?: string;
+    serviceAreas?: string[];
+    urgency?: string;
+    profile?: BusinessProfile;
+    entities?: Record<string, string>;
+  }
+): Promise<string | null> {
+  const {
+    classification,
+    businessName,
+    commenterName,
+    enquiryFormUrl,
+    tone,
+    serviceAreas,
+    urgency,
+    profile,
+    entities,
+  } = options;
+
+  const voiceTone = tone || profile?.defaultTone || "friendly Australian";
+  const firstName = commenterName?.split(" ")[0] || "there";
+  const areas = serviceAreas?.length ? serviceAreas : profile?.defaultServiceAreas || [];
+
+  // Build industry-specific qualifying questions
+  const qualifyingQuestions = buildQualifyingQuestions(classification, profile, entities);
+
+  // Build context
+  const contextParts: string[] = [];
+  if (entities?.issue_type) contextParts.push(`Issue: ${entities.issue_type}`);
+  if (entities?.service_type) contextParts.push(`Service: ${entities.service_type}`);
+  if (entities?.job_type) contextParts.push(`Job: ${entities.job_type}`);
+  if (urgency === "emergency") contextParts.push("EMERGENCY — be empathetic and fast");
+  if (urgency === "high") contextParts.push("Urgent — acknowledge this");
+  const contextBlock = contextParts.length > 0
+    ? `\nWhat we know: ${contextParts.join(", ")}\n`
+    : "";
+
+  const systemPrompt = `You are writing a private Messenger DM for ${businessName}${profile?.industryLabel ? ` (${profile.industryLabel})` : ""}.
+
+Someone just commented on your Facebook page and you're sliding into their DMs to help.
+
+GOAL: Make them feel looked after and get the info you need to help them (or book them in).
+
+VOICE:
+- ${voiceTone}
+- Casual but professional. Like texting a friendly tradie.
+- Use their first name: "${firstName}"
+- Keep it SHORT — this is a DM, not an email. 3-5 lines max.
+${urgency === "emergency" ? "- EMERGENCY: Lead with empathy. \"That sounds really stressful\" / \"We know burst pipes are no fun\". Reassure them." : ""}
+
+STRUCTURE:
+1. Friendly greeting with their name
+2. Reference what they commented about (be specific, not generic)
+3. ${urgency === "emergency" ? "Reassure them you can help quickly" : "Ask 2-3 quick qualifying questions to help you quote/book"}
+4. ${enquiryFormUrl ? `Include booking/enquiry link: ${enquiryFormUrl}` : "Let them know you'll get back to them fast"}
+${contextBlock}
+
+${qualifyingQuestions ? `QUALIFYING QUESTIONS TO ASK (pick 2-3 that are relevant):\n${qualifyingQuestions}\n` : ""}
+
+FORMATTING:
+- Use line breaks between greeting and questions
+- Questions can be bullet points with dashes (-)
+- Keep total length under 400 characters
+- Don't sign off with a name or title
+
+NEVER:
+- Promise specific pricing or timelines
+- Use corporate language ("We appreciate your inquiry")
+- Write more than 5 lines
+- Use emojis`;
+
+  const reply = await groqChat(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: `Their Facebook comment was: "${commentText}"\n\nWrite the DM:` },
+    ],
+    { maxTokens: 200, temperature: 0.6 }
+  );
+
+  if (reply) {
+    let cleaned = reply.replace(/^["']|["']$/g, "").trim();
+    cleaned = cleaned.replace(/^(DM|Message|Reply):\s*/i, "");
+    // Remove emoji
+    cleaned = cleaned.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").trim();
+    if (profile && containsBannedPhrase(cleaned, profile)) {
+      return null;
+    }
+    return cleaned;
+  }
+
+  return reply;
+}
+
+/**
+ * Build industry-specific qualifying questions based on what we already know.
+ */
+function buildQualifyingQuestions(
+  classification: CommentClassification,
+  profile?: BusinessProfile,
+  entities?: Record<string, string>
+): string {
+  const questions: string[] = [];
+
+  if (profile?.industry === "plumbing") {
+    if (!entities?.issue_type) questions.push("- What's the issue? (blocked drain, leak, hot water, etc.)");
+    if (!entities?.urgency) questions.push("- How urgent is it? (emergency / can wait a day or two)");
+    if (!entities?.location) questions.push("- What suburb are you in?");
+    if (!entities?.property_type) questions.push("- Is it a house, unit, or commercial?");
+    if (entities?.issue_type === "hot water") {
+      questions.push("- What type of hot water system? (electric, gas, solar)");
+      questions.push("- How old is it roughly?");
+    }
+    if (entities?.issue_type === "blocked drain") {
+      questions.push("- Which drain is blocked? (kitchen, bathroom, laundry, outside)");
+    }
+  } else if (profile?.industry === "hvac") {
+    if (!entities?.service_type) questions.push("- What type of system? (split, ducted, multi-head)");
+    if (!entities?.job_type) questions.push("- Is it a new install, repair, or service?");
+    if (!entities?.location) questions.push("- What suburb are you in?");
+    if (entities?.job_type === "install") {
+      questions.push("- How many rooms/zones?");
+      questions.push("- Rough size of the space?");
+    }
+  } else if (profile?.industry === "electrical") {
+    if (!entities?.issue_type) questions.push("- What do you need? (power issue, lights, switchboard, etc.)");
+    if (!entities?.urgency) questions.push("- Is it urgent or can it wait?");
+    if (!entities?.location) questions.push("- What suburb?");
+  } else {
+    // Generic qualifying questions
+    if (!entities?.location) questions.push("- What suburb are you in?");
+    if (classification === "quote_request" || classification === "pricing_request") {
+      questions.push("- Can you describe what you need done?");
+    }
+  }
+
+  return questions.slice(0, 4).join("\n");
 }
