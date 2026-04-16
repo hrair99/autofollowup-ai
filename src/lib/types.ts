@@ -270,7 +270,7 @@ export interface MetaPage {
 // ============================================
 
 export interface NormalizedWebhookEvent {
-  type: 'message' | 'comment';
+  type: 'message' | 'comment' | 'leadgen';
   pageId: string;
   senderId: string;
   text: string;
@@ -281,6 +281,11 @@ export interface NormalizedWebhookEvent {
   commentId?: string;
   parentCommentId?: string;
   isReply?: boolean;
+  // Leadgen-specific
+  leadgenId?: string;
+  formId?: string;
+  adId?: string;
+  adgroupId?: string;
 }
 
 // ============================================

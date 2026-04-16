@@ -1,6 +1,6 @@
 // ============================================
 // Meta Webhook Event Normalizer
-// Handles both Messenger messaging events and feed (comment) events
+// Handles Messenger messaging, feed (comment), and leadgen events
 // ============================================
 
 import type { NormalizedWebhookEvent } from "../types";
@@ -35,6 +35,7 @@ interface RawMessagingEvent {
 interface RawChangeEvent {
   field: string;
   value: {
+    // Feed (comment) fields
     item: string;        // "comment" | "post" | etc.
     verb: string;        // "add" | "edit" | "remove"
     comment_id?: string;
@@ -43,6 +44,11 @@ interface RawChangeEvent {
     from: { id: string; name: string };
     message?: string;
     created_time?: number;
+    // Leadgen fields
+    leadgen_id?: string;
+    form_id?: string;
+    ad_id?: string;
+    adgroup_id?: string;
   };
 }
 
@@ -89,6 +95,23 @@ export function normalizeWebhookEvents(body: RawWebhookBody): NormalizedWebhookE
     // --- Feed / comment events ---
     if (entry.changes) {
       for (const change of entry.changes) {
+        // --- Leadgen events (Facebook Lead Ads) ---
+        if (change.field === "leadgen") {
+          const val = change.value;
+          events.push({
+            type: "leadgen",
+            pageId,
+            senderId: "", // Will be resolved when fetching lead data
+            text: "",     // Lead form data fetched separately
+            timestamp: val.created_time ? val.created_time * 1000 : Date.now(),
+            leadgenId: val.leadgen_id,
+            formId: val.form_id,
+            adId: val.ad_id,
+            adgroupId: val.adgroup_id,
+          });
+          continue;
+        }
+
         if (change.field !== "feed") continue;
 
         const val = change.value;

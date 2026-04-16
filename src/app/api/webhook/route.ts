@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeWebhookEvents, verifyWebhook } from "@/lib/meta/webhooks";
 import { handleMessengerMessage } from "@/lib/conversation/engine";
 import { handleComment } from "@/lib/conversation/commentHandler";
+import { handleLeadgen } from "@/lib/conversation/leadgenHandler";
 import {
   verifyMetaSignature,
   signatureVerificationBypassed,
@@ -191,6 +192,10 @@ export async function POST(req: NextRequest) {
           // Messenger remains inline — already reliable.
           await handleMessengerMessage(event);
           processed++;
+        } else if (event.type === "leadgen") {
+          // Lead ad form submissions — process inline (fast, no AI needed)
+          await handleLeadgen(event);
+          processed++;
         } else if (event.type === "comment") {
           if (INLINE_COMMENTS) {
             await handleComment(event);
@@ -242,11 +247,4 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     const msg = String(error);
-    console.error("[Webhook] Error routing events:", error);
-    await updateDeliveryStatus(requestId, { status: "error", error: msg });
-    return NextResponse.json(
-      { status: "error", message: "Routing error", request_id: requestId },
-      { status: 200 }
-    );
-  }
-}
+    console.error("[Webhook] Error
