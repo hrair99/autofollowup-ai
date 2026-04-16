@@ -16,6 +16,11 @@ import { classifyByRules, shouldSkipAi } from "./rulesClassifier";
 import type { RuleIntentResult } from "./rulesClassifier";
 import { canSendPrivateReply } from "./privateReplyGuard";
 import { getCommentById } from "../meta/commentFetch";
+import {
+  type BusinessContext,
+  loadBusinessSettings,
+  resolveBusinessByPage,
+} from "../business/resolve";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<any, any, any>;
@@ -31,10 +36,19 @@ function getServiceClient(): DB {
 // Main Comment Handler
 // ============================================
 
-export async function handleComment(event: NormalizedWebhookEvent): Promise<void> {
+export async function handleComment(
+  event: NormalizedWebhookEvent,
+  bizCtx?: BusinessContext
+): Promise<void> {
   const supabase = getServiceClient();
   // Mutable locals so we can enrich from Graph if the webhook payload is thin.
   let { pageId, senderId, text, commentId, postId, parentCommentId, isReply } = event;
+
+  // Resolve business context if not provided
+  if (!bizCtx) {
+    bizCtx = (await resolveBusinessByPage(pageId)) ?? undefined;
+  }
+  const businessId = bizCtx?.businessId ?? null;
 
   if (!commentId) {
     console.log("[CommentHandler] drop: missing_comment_id");

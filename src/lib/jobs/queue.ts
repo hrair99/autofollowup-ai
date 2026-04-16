@@ -44,6 +44,7 @@ export interface EnqueueInput {
   dedupeKey: string;
   payload: Record<string, unknown>;
   maxAttempts?: number;
+  businessId?: string;
 }
 
 export interface EnqueueResult {
@@ -65,6 +66,7 @@ export async function enqueueJob(input: EnqueueInput): Promise<EnqueueResult> {
         dedupe_key: input.dedupeKey,
         payload: input.payload,
         max_attempts: input.maxAttempts ?? 5,
+        business_id: input.businessId || null,
         status: "pending",
         next_run_at: new Date().toISOString(),
       })

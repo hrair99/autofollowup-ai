@@ -13,6 +13,11 @@ import {
 } from "../meta/leadgen";
 import { sendMessage, sendButtonMessage } from "../meta/messenger";
 import { getUserProfile } from "../meta/client";
+import {
+  type BusinessContext,
+  loadBusinessSettings,
+  resolveBusinessByPage,
+} from "../business/resolve";
 
 type DB = ReturnType<typeof createClient>;
 
@@ -34,7 +39,8 @@ function getSupabase(): DB {
  * 5. Log the automation action
  */
 export async function handleLeadgen(
-  event: NormalizedWebhookEvent
+  event: NormalizedWebhookEvent,
+  bizCtx?: BusinessContext
 ): Promise<void> {
   const { pageId, leadgenId, formId, adId } = event;
 
@@ -43,8 +49,14 @@ export async function handleLeadgen(
     return;
   }
 
+  // Resolve business context if not provided
+  if (!bizCtx) {
+    bizCtx = (await resolveBusinessByPage(pageId)) ?? undefined;
+  }
+  const businessId = bizCtx?.businessId ?? null;
+
   console.log(
-    `[Leadgen] Processing lead ${leadgenId} from form ${formId ?? "?"}`
+    `[Leadgen] Processing lead ${leadgenId} from form ${formId ?? "?"} (business=${businessId ?? "unknown"})`
   );
 
   const supabase = getSupabase();
@@ -62,10 +74,11 @@ export async function handleLeadgen(
   }
 
   // --- 2. Fetch lead data from Meta ---
+  // Use the business page token if available, otherwise fall back to env
   let leadData;
   let parsedFields: ParsedLeadFields;
   try {
-    leadData = await fetchLeadgenData(leadgenId, pageId);
+    leadData = await fetchLeadgenData(leadgenId, pageId, bizCtx?.pageToken);
     parsedFields = parseLeadFields(leadData.field_data);
     console.log(
       `[Leadgen] Fetched lead: ${parsedFields.fullName || parsedFields.firstName || "unknown"}, email=${parsedFields.email}, phone=${parsedFields.phone}`
@@ -78,6 +91,7 @@ export async function handleLeadgen(
       page_id: pageId,
       form_id: formId,
       ad_id: adId,
+      business_id: businessId,
       status: "fetch_failed",
       error_message: String(err),
       raw_field_data: {},
@@ -86,7 +100,9 @@ export async function handleLeadgen(
   }
 
   // --- 3. Load settings ---
-  const settings = await loadSettings(supabase);
+  const settings = businessId
+    ? await loadBusinessSettings(businessId)
+    : await loadSettings(supabase);
   if (!settings) {
     console.error("[Leadgen] No settings found, cannot process lead");
     return;
@@ -124,6 +140,7 @@ export async function handleLeadgen(
       job_description: parsedFields.jobDescription,
       raw_field_data: parsedFields.raw,
       status: "received",
+      business_id: businessId,
       created_at: leadData.created_time || new Date().toISOString(),
     })
     .select("id")
@@ -136,6 +153,7 @@ export async function handleLeadgen(
   // --- 6. Create/update lead in main leads table ---
   const leadId = await upsertLead(supabase, {
     userId: settings.user_id,
+    businessId,
     pageId,
     platformUserId,
     name: leadName === "there" ? "Lead Ad Submission" : leadName,
@@ -216,6 +234,7 @@ export async function handleLeadgen(
   // --- 9. Log automation event ---
   await supabase.from("automation_logs").insert({
     lead_id: leadId,
+    business_id: businessId,
     event_type: "leadgen_processed",
     channel: "leadgen",
     channel_type: "leadgen",
@@ -267,6 +286,7 @@ async function upsertLead(
   supabase: DB,
   input: {
     userId: string;
+    businessId: string | null;
     pageId: string;
     platformUserId: string | null;
     name: string;
@@ -318,6 +338,7 @@ async function upsertLead(
       .from("leads")
       .insert({
         user_id: input.userId,
+        business_id: input.businessId,
         name: input.name,
         email,
         phone: input.phone,

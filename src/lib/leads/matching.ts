@@ -29,6 +29,7 @@ export interface CommentLeadContext {
   commenterPlatformId: string;
   commenterName?: string;
   source: "facebook_comment";
+  businessId?: string | null;
 }
 
 export interface LeadMatchResult {
@@ -55,14 +56,19 @@ export async function findOrCreateCommentLead(
   ctx: CommentLeadContext
 ): Promise<LeadMatchResult | null> {
   const supabase = getServiceClient();
-  const { pageId, postId, commentId, commenterPlatformId, commenterName } = ctx;
+  const { pageId, postId, commentId, commenterPlatformId, commenterName, businessId } = ctx;
 
-  // --- 1. Look up by platform_user_id ---
-  let { data: existingLead } = await supabase
+  // --- 1. Look up by platform_user_id (scoped to business if available) ---
+  let leadQuery = supabase
     .from("leads")
     .select("*")
-    .eq("platform_user_id", commenterPlatformId)
-    .single();
+    .eq("platform_user_id", commenterPlatformId);
+
+  if (businessId) {
+    leadQuery = leadQuery.eq("business_id", businessId);
+  }
+
+  let { data: existingLead } = await leadQuery.maybeSingle();
 
   if (existingLead) {
     const wasMessenger = existingLead.source === "messenger";
@@ -119,9 +125,20 @@ export async function findOrCreateCommentLead(
   }
 
   // --- 3. Create new lead ---
-  // Find a user to assign
-  const { data: users } = await supabase.auth.admin.listUsers();
-  const assignedUserId = users?.users?.[0]?.id;
+  // Find a user to assign: prefer business owner, fallback to first user
+  let assignedUserId: string | undefined;
+  if (businessId) {
+    const { data: biz } = await supabase
+      .from("businesses")
+      .select("owner_id")
+      .eq("id", businessId)
+      .single();
+    assignedUserId = biz?.owner_id;
+  }
+  if (!assignedUserId) {
+    const { data: users } = await supabase.auth.admin.listUsers();
+    assignedUserId = users?.users?.[0]?.id;
+  }
 
   if (!assignedUserId) {
     console.error("[LeadMatching] No users in system to assign lead to");
@@ -141,6 +158,7 @@ export async function findOrCreateCommentLead(
     .from("leads")
     .insert({
       user_id: assignedUserId,
+      business_id: businessId || null,
       name,
       email: `messenger_${commenterPlatformId}@meta.local`,
       platform_user_id: commenterPlatformId,

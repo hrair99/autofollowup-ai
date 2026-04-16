@@ -48,9 +48,10 @@ export interface ParsedLeadFields {
  */
 export async function fetchLeadgenData(
   leadgenId: string,
-  pageId?: string
+  pageId?: string,
+  explicitToken?: string
 ): Promise<LeadgenData> {
-  const token = getPageToken(pageId);
+  const token = getPageToken(pageId, explicitToken);
   const fields =
     "id,created_time,ad_id,adset_id,campaign_id,form_id,field_data";
   const data = (await graphApi(`/${leadgenId}?fields=${fields}`, {

@@ -1,6 +1,7 @@
 // ============================================
 // Meta Graph API Base Client
 // Shared utilities for Messenger + Comments
+// Supports multi-tenant via BusinessContext or env-var fallback
 // ============================================
 
 const GRAPH_API_VERSION = "v25.0";
@@ -8,9 +9,15 @@ const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 /**
  * Get the page access token for a given page ID.
- * Priority: META_PAGE_TOKENS JSON map → META_PAGE_TOKEN fallback.
+ * Priority:
+ *   1. Explicit token passed in (from BusinessContext)
+ *   2. META_PAGE_TOKENS JSON map (env var)
+ *   3. META_PAGE_TOKEN fallback (env var)
  */
-export function getPageToken(pageId?: string): string {
+export function getPageToken(pageId?: string, explicitToken?: string): string {
+  // If caller already resolved the token (multi-tenant path), use it directly
+  if (explicitToken) return explicitToken;
+
   if (pageId && process.env.META_PAGE_TOKENS) {
     try {
       const tokens = JSON.parse(process.env.META_PAGE_TOKENS);

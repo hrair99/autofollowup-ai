@@ -12,6 +12,11 @@ import { mergeQualificationData } from "./qualification";
 import { sendMessage, sendTypingIndicator } from "../meta/messenger";
 import { getUserProfile } from "../meta/client";
 import { scheduleNextFollowUp } from "./followUpScheduler";
+import {
+  type BusinessContext,
+  loadBusinessSettings,
+  resolveBusinessByPage,
+} from "../business/resolve";
 import type {
   Lead,
   Settings,
@@ -37,19 +42,30 @@ function getServiceClient(): DB {
 // MESSENGER MESSAGE HANDLER
 // ============================================
 
-export async function handleMessengerMessage(event: NormalizedWebhookEvent): Promise<void> {
+export async function handleMessengerMessage(
+  event: NormalizedWebhookEvent,
+  bizCtx?: BusinessContext
+): Promise<void> {
   const supabase = getServiceClient();
   const { pageId, senderId, text, timestamp, platformMessageId } = event;
 
-  console.log(`[Engine] Message on page ${pageId} from ${senderId}: ${text}`);
+  // Resolve business context if not provided
+  if (!bizCtx) {
+    bizCtx = (await resolveBusinessByPage(pageId)) ?? undefined;
+  }
+  const businessId = bizCtx?.businessId ?? null;
+
+  console.log(`[Engine] Message on page ${pageId} from ${senderId} (biz=${businessId ?? "?"}): ${text}`);
 
   try {
     // 1. Find or create lead
-    const lead = await findOrCreateLead(supabase, senderId, pageId);
+    const lead = await findOrCreateLead(supabase, senderId, pageId, undefined, businessId);
     if (!lead) return;
 
     // 2. Load settings + FAQ
-    const { settings, faqEntries } = await loadUserConfig(supabase, lead.user_id);
+    const { settings, faqEntries } = businessId
+      ? await loadBusinessConfig(supabase, businessId)
+      : await loadUserConfig(supabase, lead.user_id);
 
     // 3. Save inbound message
     const messageRecord = await saveMessage(supabase, {
@@ -247,22 +263,34 @@ async function findOrCreateLead(
   supabase: DB,
   platformUserId: string,
   pageId: string,
-  extras?: { source?: string; source_post_id?: string; source_comment_id?: string }
+  extras?: { source?: string; source_post_id?: string; source_comment_id?: string },
+  businessId?: string | null
 ): Promise<Lead | null> {
   // Look up by platform_user_id first (new way)
-  let { data: lead } = await supabase
+  // If we have a businessId, scope to that business to prevent cross-tenant matches
+  let query = supabase
     .from("leads")
     .select("*")
-    .eq("platform_user_id", platformUserId)
-    .single();
+    .eq("platform_user_id", platformUserId);
+
+  if (businessId) {
+    query = query.eq("business_id", businessId);
+  }
+
+  let { data: lead } = await query.maybeSingle();
 
   // Fallback: look up by legacy email format
   if (!lead) {
-    const { data: legacyLead } = await supabase
+    let legacyQuery = supabase
       .from("leads")
       .select("*")
-      .eq("email", `messenger_${platformUserId}@meta.local`)
-      .single();
+      .eq("email", `messenger_${platformUserId}@meta.local`);
+
+    if (businessId) {
+      legacyQuery = legacyQuery.eq("business_id", businessId);
+    }
+
+    const { data: legacyLead } = await legacyQuery.maybeSingle();
 
     if (legacyLead) {
       // Migrate legacy lead to use platform_user_id
@@ -282,8 +310,20 @@ async function findOrCreateLead(
       : `User ${platformUserId.slice(-4)}`;
 
     // Find a user to assign this lead to
-    const { data: users } = await supabase.auth.admin.listUsers();
-    const assignedUserId = users?.users?.[0]?.id;
+    // Multi-tenant: use the business owner. Fallback: first user in system.
+    let assignedUserId: string | undefined;
+    if (businessId) {
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("owner_id")
+        .eq("id", businessId)
+        .single();
+      assignedUserId = biz?.owner_id;
+    }
+    if (!assignedUserId) {
+      const { data: users } = await supabase.auth.admin.listUsers();
+      assignedUserId = users?.users?.[0]?.id;
+    }
 
     if (!assignedUserId) {
       console.error("[Engine] No users in system to assign lead to");
@@ -294,6 +334,7 @@ async function findOrCreateLead(
       .from("leads")
       .insert({
         user_id: assignedUserId,
+        business_id: businessId || null,
         name,
         email: `messenger_${platformUserId}@meta.local`,
         platform_user_id: platformUserId,
@@ -328,6 +369,36 @@ async function loadUserConfig(
     supabase.from("settings").select("*").eq("user_id", userId).single(),
     supabase.from("faq_entries").select("*").eq("user_id", userId).eq("is_active", true).order("sort_order"),
   ]);
+
+  const settings: Settings = settingsResult.data || getDefaultSettings(userId);
+  const faqEntries: FaqEntry[] = faqResult.data || [];
+
+  return { settings, faqEntries };
+}
+
+/**
+ * Load settings + FAQ for a business (multi-tenant path).
+ */
+async function loadBusinessConfig(
+  supabase: DB,
+  businessId: string
+): Promise<{ settings: Settings; faqEntries: FaqEntry[] }> {
+  const [settingsResult, faqResult] = await Promise.all([
+    supabase.from("settings").select("*").eq("business_id", businessId).maybeSingle(),
+    supabase.from("faq_entries").select("*").eq("business_id", businessId).eq("is_active", true).order("sort_order"),
+  ]);
+
+  // Fall back to first user in business for defaults
+  let userId = settingsResult.data?.user_id;
+  if (!userId) {
+    const { data: membership } = await supabase
+      .from("user_businesses")
+      .select("user_id")
+      .eq("business_id", businessId)
+      .eq("role", "owner")
+      .maybeSingle();
+    userId = membership?.user_id || "unknown";
+  }
 
   const settings: Settings = settingsResult.data || getDefaultSettings(userId);
   const faqEntries: FaqEntry[] = faqResult.data || [];

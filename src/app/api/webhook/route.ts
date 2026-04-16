@@ -14,6 +14,7 @@ import {
   updateDeliveryStatus,
 } from "@/lib/observability/webhookLog";
 import { commentDedupeKey, enqueueJob } from "@/lib/jobs/queue";
+import { resolveBusinessByPage, type BusinessContext } from "@/lib/business/resolve";
 
 // Node runtime required for HMAC verification.
 export const runtime = "nodejs";
@@ -186,19 +187,43 @@ export async function POST(req: NextRequest) {
     let enqueued = 0;
     const dropReasons: string[] = [];
 
+    // Resolve business context per page (cache across events in same batch)
+    const bizCache = new Map<string, BusinessContext | null>();
+    async function getBizCtx(pgId: string): Promise<BusinessContext | null> {
+      if (!bizCache.has(pgId)) {
+        bizCache.set(pgId, await resolveBusinessByPage(pgId));
+      }
+      return bizCache.get(pgId) ?? null;
+    }
+
     for (const event of events) {
       try {
+        // Resolve which business owns this page
+        const bizCtx = await getBizCtx(event.pageId);
+        if (!bizCtx) {
+          dropReasons.push(`no_business:${event.pageId}`);
+          console.warn(`[Webhook] No business found for page ${event.pageId}, skipping ${event.type}`);
+          continue;
+        }
+
+        // Skip processing if business is in monitor mode (except leadgen which is just storage)
+        if (bizCtx.mode === "monitor" && event.type !== "leadgen") {
+          console.log(`[Webhook] Business ${bizCtx.businessId} in monitor mode, skipping ${event.type}`);
+          dropReasons.push(`monitor_mode:${event.type}`);
+          continue;
+        }
+
         if (event.type === "message") {
           // Messenger remains inline — already reliable.
-          await handleMessengerMessage(event);
+          await handleMessengerMessage(event, bizCtx);
           processed++;
         } else if (event.type === "leadgen") {
           // Lead ad form submissions — process inline (fast, no AI needed)
-          await handleLeadgen(event);
+          await handleLeadgen(event, bizCtx);
           processed++;
         } else if (event.type === "comment") {
           if (INLINE_COMMENTS) {
-            await handleComment(event);
+            await handleComment(event, bizCtx);
             processed++;
           } else {
             const key = commentDedupeKey(
@@ -208,7 +233,8 @@ export async function POST(req: NextRequest) {
             const res = await enqueueJob({
               type: "handle_comment",
               dedupeKey: key,
-              payload: { event, request_id: requestId },
+              payload: { event, request_id: requestId, business_id: bizCtx.businessId },
+              businessId: bizCtx.businessId,
             });
             if (res.enqueued) enqueued++;
             else if (res.reason === "duplicate") {
