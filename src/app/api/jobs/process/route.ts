@@ -7,6 +7,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { claimNextJob, completeJob, failJob } from "@/lib/jobs/queue";
 import { handleComment } from "@/lib/conversation/commentHandler";
+import { handleMessengerMessage } from "@/lib/conversation/engine";
+import { resolveBusinessByPage } from "@/lib/business/resolve";
 import type { NormalizedWebhookEvent } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -36,14 +38,25 @@ export async function POST(req: NextRequest) {
   }> = [];
 
   for (let i = 0; i < MAX_BATCH; i++) {
-    const job = await claimNextJob(["handle_comment"]);
+    const job = await claimNextJob(["handle_comment", "handle_message"]);
     if (!job) break;
 
     try {
+      const payload = job.payload as {
+        event: NormalizedWebhookEvent;
+        business_id?: string;
+      };
+      if (!payload?.event) throw new Error("missing_event_payload");
+
+      // Resolve business context from the job's business_id or the event's pageId
+      const bizCtx = payload.business_id
+        ? await resolveBusinessByPage(payload.event.pageId)
+        : await resolveBusinessByPage(payload.event.pageId);
+
       if (job.type === "handle_comment") {
-        const payload = job.payload as { event: NormalizedWebhookEvent };
-        if (!payload?.event) throw new Error("missing_event_payload");
-        await handleComment(payload.event);
+        await handleComment(payload.event, bizCtx ?? undefined);
+      } else if (job.type === "handle_message") {
+        await handleMessengerMessage(payload.event, bizCtx ?? undefined);
       } else {
         throw new Error(`unknown_job_type:${job.type}`);
       }
