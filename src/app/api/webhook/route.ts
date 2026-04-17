@@ -273,4 +273,10 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     const msg = String(error);
-    console.error("[Webhook] Error
+    console.error("[Webhook] Error processing:", msg);
+    return NextResponse.json(
+      { error: "internal_error", message: msg },
+      { status: 500 }
+    );
+  }
+}

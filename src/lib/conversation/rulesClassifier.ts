@@ -209,4 +209,8 @@ export function classifyByRules(text: string): RuleIntentResult {
 
 /**
  * Should we skip the AI call and trust rules?
- * Threshold is intentional
+ * Threshold is intentionally high — we only skip AI when rules are very confident.
+ */
+export function rulesAreConfident(result: RuleIntentResult): boolean {
+  return result.confidence >= 0.7 && result.intent !== "general_question";
+}

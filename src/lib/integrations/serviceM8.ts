@@ -45,4 +45,5 @@ export async function pushLeadToServiceM8(
   console.warn(
     "[ServiceM8] SERVICEM8_API_KEY is set but real integration is not implemented yet."
   );
-  return { ok: fal
+  return { ok: false, stub: true, reason: "real_integration_not_implemented" };
+}

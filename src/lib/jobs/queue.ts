@@ -170,4 +170,7 @@ export async function failJob(
       next_run_at: nextRun,
       updated_at: new Date().toISOString(),
       lock_token: null,
-     
+      locked_at: null,
+    })
+    .eq("id", id);
+}

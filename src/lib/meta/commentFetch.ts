@@ -89,4 +89,8 @@ export async function getCommentEligibility(
   const canReply = c.can_reply_privately !== false;
   return {
     ok: true,
-    canReplyPrivately:
+    canReplyPrivately: canReply,
+    reason: canReply ? "eligible" : "can_reply_privately_false",
+    raw: c,
+  };
+}

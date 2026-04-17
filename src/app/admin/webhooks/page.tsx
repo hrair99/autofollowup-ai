@@ -223,4 +223,20 @@ function Table({ columns, rows }: { columns: string[]; rows: string[][] }) {
                   style={{
                     border: "1px solid #eee",
                     verticalAlign: "top",
-                    whiteSpace: "pre-wrap",
+                    whiteSpace: "pre-wrap",
+                    maxWidth: 400,
+                    overflow: "auto",
+                    fontSize: 12,
+                    padding: 4,
+                  }}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  );
+}
