@@ -54,37 +54,43 @@ export async function POST(req: NextRequest) {
       // Resolve business context from the event's pageId
       const bizCtx = await resolveBusinessByPage(payload.event.pageId);
 
-      // --- Subscription gate ---
+      // --- Subscription + Usage gates (fail-open) ---
+      // These gates check billing status but NEVER block if they error.
+      // We'd rather process a job for free than silently drop it.
       if (bizCtx) {
-        const subGate = await checkSubscriptionGate(bizCtx.businessId);
-        if (!subGate.allowed) {
-          // Subscription inactive — skip this job but mark it done (not retryable)
-          await completeJob(job.id);
-          results.push({
-            jobId: job.id,
-            type: job.type,
-            status: "skipped",
-            reason: `subscription_blocked:${subGate.reason}`,
-          });
-          continue;
-        }
+        try {
+          const subGate = await checkSubscriptionGate(bizCtx.businessId);
+          if (!subGate.allowed) {
+            await completeJob(job.id);
+            results.push({
+              jobId: job.id,
+              type: job.type,
+              status: "skipped",
+              reason: `subscription_blocked:${subGate.reason}`,
+            });
+            continue;
+          }
 
-        // --- Usage gate ---
-        const metric = job.type === "handle_comment" ? "comments_processed" : "dms_sent";
-        const usageGate = await checkAndIncrementUsage(
-          bizCtx.businessId,
-          metric as any,
-          subGate.plan
-        );
-        if (!usageGate.allowed) {
-          await completeJob(job.id);
-          results.push({
-            jobId: job.id,
-            type: job.type,
-            status: "skipped",
-            reason: usageGate.reason,
-          });
-          continue;
+          // Usage gate
+          const metric = job.type === "handle_comment" ? "comments_processed" : "dms_sent";
+          const usageGate = await checkAndIncrementUsage(
+            bizCtx.businessId,
+            metric as any,
+            subGate.plan
+          );
+          if (!usageGate.allowed) {
+            await completeJob(job.id);
+            results.push({
+              jobId: job.id,
+              type: job.type,
+              status: "skipped",
+              reason: usageGate.reason,
+            });
+            continue;
+          }
+        } catch (gateError) {
+          // Billing check failed — process the job anyway
+          console.error(`[JobProcessor] Billing gate error for ${bizCtx.businessId}: ${gateError} — processing anyway`);
         }
       }
 

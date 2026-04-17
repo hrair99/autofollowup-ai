@@ -37,9 +37,9 @@ export interface PlanLimits {
 }
 
 const PLAN_LIMITS: Record<string, PlanLimits> = {
-  free:      { comments_per_month: 50,   dms_per_month: 30,   ai_calls_per_month: 100,  max_pages: 1 },
-  starter:   { comments_per_month: 300,  dms_per_month: 200,  ai_calls_per_month: 500,  max_pages: 2 },
-  pro:       { comments_per_month: 2000, dms_per_month: 1500, ai_calls_per_month: 5000, max_pages: 5 },
+  free:      { comments_per_month: 500,  dms_per_month: 300,  ai_calls_per_month: 1000, max_pages: 1 },
+  starter:   { comments_per_month: 2000, dms_per_month: 1500, ai_calls_per_month: 5000, max_pages: 2 },
+  pro:       { comments_per_month: 10000,dms_per_month: 8000, ai_calls_per_month: 25000,max_pages: 5 },
   unlimited: { comments_per_month: -1,   dms_per_month: -1,   ai_calls_per_month: -1,   max_pages: -1 },
 };
 
@@ -67,26 +67,29 @@ export interface SubscriptionGate {
 
 /**
  * Check if a business is allowed to run automation.
- * Returns false if subscription is inactive or business is in free plan with limits exceeded.
+ * Returns false only if a paid subscription is explicitly canceled/unpaid.
+ * Free plan and businesses without a plan set are always allowed through.
  */
 export async function checkSubscriptionGate(businessId: string): Promise<SubscriptionGate> {
   const supabase = getServiceClient();
 
-  const { data: biz } = await supabase
+  const { data: biz, error } = await supabase
     .from("businesses")
     .select("plan, subscription_status, onboarding_completed")
     .eq("id", businessId)
     .single();
 
-  if (!biz) {
-    return { allowed: false, reason: "business_not_found", plan: "free", subscriptionStatus: "none" };
+  if (error || !biz) {
+    // If we can't read the business, let jobs through rather than silently dropping them
+    console.warn(`[SubscriptionGate] Could not read business ${businessId}: ${error?.message || "not found"} — allowing through`);
+    return { allowed: true, reason: "business_read_error_passthrough", plan: "free", subscriptionStatus: "none" };
   }
 
   const plan = biz.plan || "free";
-  const status = biz.subscription_status || "active";
+  const status = biz.subscription_status || "none";
 
-  // Free plan always allowed (usage limits checked separately)
-  if (plan === "free") {
+  // Free plan or no plan set — always allowed (usage limits checked separately)
+  if (plan === "free" || !biz.plan) {
     return { allowed: true, reason: "free_plan", plan, subscriptionStatus: status };
   }
 
@@ -98,6 +101,11 @@ export async function checkSubscriptionGate(businessId: string): Promise<Subscri
   // Past due — allow but warn (Stripe retries payment)
   if (status === "past_due") {
     return { allowed: true, reason: "subscription_past_due", plan, subscriptionStatus: status };
+  }
+
+  // No status set yet (e.g. just upgraded, webhook hasn't fired) — allow through
+  if (!status || status === "none") {
+    return { allowed: true, reason: "no_subscription_status_yet", plan, subscriptionStatus: status };
   }
 
   // Canceled, unpaid, etc.
@@ -119,82 +127,135 @@ export interface UsageCheck {
 /**
  * Check if business is within usage limits for a specific metric.
  * Also increments usage if within limits.
+ *
+ * IMPORTANT: This function is fail-open — if usage tracking fails
+ * (table doesn't exist, RPC not found, etc.) it allows the action
+ * through. We never want billing infrastructure to silently kill
+ * the core automation pipeline.
  */
 export async function checkAndIncrementUsage(
   businessId: string,
   metric: "comments_processed" | "dms_sent" | "ai_calls" | "public_replies_sent",
   plan?: string
 ): Promise<UsageCheck> {
-  const supabase = getServiceClient();
-  const period = new Date().toISOString().slice(0, 7); // YYYY-MM
+  try {
+    const supabase = getServiceClient();
+    const period = new Date().toISOString().slice(0, 7); // YYYY-MM
 
-  // Get plan if not provided
-  if (!plan) {
-    const { data: biz } = await supabase
-      .from("businesses")
-      .select("plan")
-      .eq("id", businessId)
-      .single();
-    plan = biz?.plan || "free";
+    // Get plan if not provided
+    if (!plan) {
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("plan")
+        .eq("id", businessId)
+        .single();
+      plan = biz?.plan || "free";
+    }
+
+    const limits = getPlanLimits(plan);
+
+    // Map metric to limit field
+    const limitMap: Record<string, number> = {
+      comments_processed: limits.comments_per_month,
+      dms_sent: limits.dms_per_month,
+      ai_calls: limits.ai_calls_per_month,
+      public_replies_sent: limits.comments_per_month, // Same bucket as comments
+    };
+
+    const limit = limitMap[metric] ?? 0;
+
+    // Unlimited plan
+    if (limit === -1) {
+      // Still increment for tracking, but always allow
+      await safeIncrementUsage(supabase, businessId, metric, period);
+      return { allowed: true, reason: "unlimited", current: 0, limit: -1, percentUsed: 0 };
+    }
+
+    // Get current usage
+    const { data: usage, error: usageError } = await supabase
+      .from("business_usage")
+      .select(metric)
+      .eq("business_id", businessId)
+      .eq("period", period)
+      .maybeSingle();
+
+    if (usageError) {
+      // Table might not exist yet — allow through
+      console.warn(`[UsageCheck] Failed to read usage for ${businessId}: ${usageError.message} — allowing through`);
+      return { allowed: true, reason: "usage_read_error_passthrough", current: 0, limit, percentUsed: 0 };
+    }
+
+    const current = (usage as Record<string, number> | null)?.[metric] || 0;
+
+    if (current >= limit) {
+      return {
+        allowed: false,
+        reason: `usage_limit_exceeded:${metric}`,
+        current,
+        limit,
+        percentUsed: 100,
+      };
+    }
+
+    // Increment (non-blocking — don't fail the job if increment fails)
+    await safeIncrementUsage(supabase, businessId, metric, period);
+
+    return {
+      allowed: true,
+      reason: "within_limit",
+      current: current + 1,
+      limit,
+      percentUsed: Math.round(((current + 1) / limit) * 100),
+    };
+  } catch (error) {
+    // Fail-open: if anything in the usage check throws, allow through
+    console.error(`[UsageCheck] Unexpected error for ${businessId}/${metric}: ${error} — allowing through`);
+    return { allowed: true, reason: "usage_check_error_passthrough", current: 0, limit: 0, percentUsed: 0 };
   }
+}
 
-  const limits = getPlanLimits(plan);
-
-  // Map metric to limit field
-  const limitMap: Record<string, number> = {
-    comments_processed: limits.comments_per_month,
-    dms_sent: limits.dms_per_month,
-    ai_calls: limits.ai_calls_per_month,
-    public_replies_sent: limits.comments_per_month, // Same bucket as comments
-  };
-
-  const limit = limitMap[metric] ?? 0;
-
-  // Unlimited plan
-  if (limit === -1) {
-    // Still increment for tracking, but always allow
-    await supabase.rpc("increment_usage", {
+/**
+ * Safely increment usage — upserts the row if it doesn't exist,
+ * and swallows errors to avoid breaking the main pipeline.
+ */
+async function safeIncrementUsage(
+  supabase: any,
+  businessId: string,
+  metric: string,
+  period: string
+): Promise<void> {
+  try {
+    // Try the RPC first
+    const { error: rpcError } = await supabase.rpc("increment_usage", {
       p_business_id: businessId,
       p_field: metric,
       p_amount: 1,
     });
-    return { allowed: true, reason: "unlimited", current: 0, limit: -1, percentUsed: 0 };
+
+    if (rpcError) {
+      // RPC might not exist — try direct upsert as fallback
+      console.warn(`[UsageCheck] increment_usage RPC failed: ${rpcError.message} — trying direct upsert`);
+
+      // First try to insert a new row
+      const { error: insertError } = await supabase
+        .from("business_usage")
+        .upsert(
+          {
+            business_id: businessId,
+            period,
+            [metric]: 1,
+          },
+          { onConflict: "business_id,period" }
+        );
+
+      if (insertError) {
+        console.warn(`[UsageCheck] Direct upsert also failed: ${insertError.message} — skipping usage tracking`);
+      }
+    }
+  } catch (e) {
+    // Non-critical — don't let usage tracking break automation
+    console.warn(`[UsageCheck] safeIncrementUsage failed: ${e}`);
   }
-
-  // Get current usage
-  const { data: usage } = await supabase
-    .from("business_usage")
-    .select(metric)
-    .eq("business_id", businessId)
-    .eq("period", period)
-    .maybeSingle();
-
-  const current = (usage as Record<string, number> | null)?.[metric] || 0;
-
-  if (current >= limit) {
-    return {
-      allowed: false,
-      reason: `usage_limit_exceeded:${metric}`,
-      current,
-      limit,
-      percentUsed: 100,
-    };
-  }
-
-  // Increment
-  await supabase.rpc("increment_usage", {
-    p_business_id: businessId,
-    p_field: metric,
-    p_amount: 1,
-  });
-
-  return {
-    allowed: true,
-    reason: "within_limit",
-    current: current + 1,
-    limit,
-    percentUsed: Math.round(((current + 1) / limit) * 100),
-  };
 }
 
 /**
