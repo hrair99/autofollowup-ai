@@ -15,6 +15,7 @@ const SUBSCRIBED_FIELDS = [
   "message_deliveries",
   "message_reads",
   "feed",
+  "leadgen",
 ];
 
 function auth(request: Request): boolean {
@@ -48,7 +49,7 @@ async function graphPost(path: string, body: Record<string, unknown>, token: str
 }
 
 // Resolve Page ID without needing pages_read_engagement.
-// Prefers META_PAGE_ID env var; falls back to debug_token inspection.
+// Prefers META_PAGE_ID env var; falls back to debug_token inspection; then hardcoded fallback.
 async function resolvePageId(token: string): Promise<string | null> {
   if (process.env.META_PAGE_ID) return process.env.META_PAGE_ID;
   const inspect = await graphGet(
@@ -56,7 +57,9 @@ async function resolvePageId(token: string): Promise<string | null> {
     token
   );
   const id = inspect.data?.data?.profile_id || inspect.data?.data?.user_id;
-  return id ? String(id) : null;
+  if (id) return String(id);
+  // Hardcoded fallback for HR AIR page
+  return "716051874926664";
 }
 
 // GET — view current page info + existing subscriptions

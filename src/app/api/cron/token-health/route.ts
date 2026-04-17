@@ -32,18 +32,20 @@ export async function GET(req: NextRequest) {
 
   const results = await checkAllTokenHealth();
 
-  // Auto-refresh tokens that are expiring
+  // Auto-refresh tokens that are expiring, expired, or invalid
   const refreshResults: Array<{
     pageId: string;
+    status: string;
     refreshed: boolean;
     error?: string;
   }> = [];
 
   for (const r of results) {
-    if (r.status === "expiring") {
+    if (r.status === "expiring" || r.status === "expired" || r.status === "invalid") {
       const refresh = await refreshPageToken(r.businessId, r.pageId);
       refreshResults.push({
         pageId: r.pageId,
+        status: r.status,
         refreshed: refresh.ok,
         error: refresh.error,
       });

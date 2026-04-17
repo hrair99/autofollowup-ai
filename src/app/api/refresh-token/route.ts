@@ -6,6 +6,7 @@
 // ============================================
 
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 function auth(request: Request): boolean {
   const header = request.headers.get("authorization") || "";
@@ -105,12 +106,72 @@ export async function POST(request: Request) {
     );
     const debugData = await debugRes.json();
 
+    // 4. Persist tokens to Supabase
+    const persistResults: string[] = [];
+    try {
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+      );
+
+      // Find the business that owns this page
+      const { data: pageRow } = await supabase
+        .from("business_pages")
+        .select("business_id")
+        .eq("page_id", pageId)
+        .maybeSingle();
+
+      const businessId = pageRow?.business_id;
+
+      // Update business_pages with new page token
+      const { error: pageErr } = await supabase
+        .from("business_pages")
+        .update({
+          access_token: pageToken,
+          token_status: "valid",
+          token_expires_at: null, // never-expires page token
+          updated_at: new Date().toISOString(),
+        })
+        .eq("page_id", pageId);
+
+      if (pageErr) {
+        persistResults.push(`business_pages update failed: ${pageErr.message}`);
+      } else {
+        persistResults.push("business_pages updated with new page token");
+      }
+
+      // Update businesses with long-lived user token
+      if (businessId) {
+        const expiresAt = userTokenExpiresIn
+          ? new Date(Date.now() + userTokenExpiresIn * 1000).toISOString()
+          : null;
+
+        const { error: bizErr } = await supabase
+          .from("businesses")
+          .update({
+            meta_user_token: longLivedUserToken,
+            meta_token_expires_at: expiresAt,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", businessId);
+
+        if (bizErr) {
+          persistResults.push(`businesses update failed: ${bizErr.message}`);
+        } else {
+          persistResults.push("businesses updated with long-lived user token");
+        }
+      }
+    } catch (persistError) {
+      persistResults.push(`persist error: ${String(persistError)}`);
+    }
+
     return NextResponse.json({
       ok: true,
       page: { id: pageId, name: match.name },
       page_token: pageToken,
       page_token_info: debugData?.data || null,
       long_lived_user_token_expires_in_seconds: userTokenExpiresIn ?? null,
+      persisted: persistResults,
       next_steps: [
         "Update META_PAGE_TOKEN env var in Vercel with page_token",
         "Redeploy production",
