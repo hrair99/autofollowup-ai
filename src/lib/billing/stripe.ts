@@ -152,7 +152,7 @@ export async function checkAndIncrementUsage(
       plan = biz?.plan || "free";
     }
 
-    const limits = getPlanLimits(plan);
+    const limits = getPlanLimits(plan || "free");
 
     // Map metric to limit field
     const limitMap: Record<string, number> = {
@@ -274,7 +274,7 @@ export async function getUsageSummary(businessId: string, plan?: string) {
     plan = biz?.plan || "free";
   }
 
-  const limits = getPlanLimits(plan);
+  const limits = getPlanLimits(plan || "free");
 
   const { data: usage } = await supabase
     .from("business_usage")
