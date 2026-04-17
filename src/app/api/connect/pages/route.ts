@@ -80,7 +80,7 @@ export async function GET() {
 
     // Handle pagination
     while (url) {
-      const res = await fetch(url);
+      const res: Response = await fetch(url);
       const data = await res.json();
 
       if (!res.ok || data.error) {

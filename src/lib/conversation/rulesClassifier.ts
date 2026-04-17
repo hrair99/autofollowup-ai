@@ -214,3 +214,10 @@ export function classifyByRules(text: string): RuleIntentResult {
 export function rulesAreConfident(result: RuleIntentResult): boolean {
   return result.confidence >= 0.7 && result.intent !== "general_question";
 }
+
+/**
+ * Alias used by commentHandler — should we skip the AI call and trust rules?
+ */
+export function shouldSkipAi(result: RuleIntentResult): boolean {
+  return rulesAreConfident(result);
+}

@@ -174,3 +174,11 @@ export async function failJob(
     })
     .eq("id", id);
 }
+
+/**
+ * Build a deterministic dedupe key for comment jobs.
+ * Prevents the same comment being processed twice.
+ */
+export function commentDedupeKey(pageId: string, commentId: string): string {
+  return `comment:${pageId}:${commentId}`;
+}
