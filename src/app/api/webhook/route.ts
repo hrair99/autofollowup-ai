@@ -189,12 +189,12 @@ export async function POST(req: NextRequest) {
 
     // Resolve business context per page (cache across events in same batch)
     const bizCache = new Map<string, BusinessContext | null>();
-    async function getBizCtx(pgId: string): Promise<BusinessContext | null> {
+    const getBizCtx = async (pgId: string): Promise<BusinessContext | null> => {
       if (!bizCache.has(pgId)) {
         bizCache.set(pgId, await resolveBusinessByPage(pgId));
       }
       return bizCache.get(pgId) ?? null;
-    }
+    };
 
     for (const event of events) {
       try {
