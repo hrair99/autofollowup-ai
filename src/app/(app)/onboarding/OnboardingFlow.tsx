@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 interface Props {
@@ -10,13 +10,15 @@ interface Props {
   connectedPages: Array<{ page_id: string; page_name: string; is_active: boolean }>;
   currentStep: string;
   mode: string;
+  sessionId?: string | null;
 }
 
 const STEPS = [
-  { key: "connect_facebook", label: "Connect Facebook", number: 1 },
-  { key: "select_page", label: "Select Page", number: 2 },
-  { key: "preview_replies", label: "Preview Replies", number: 3 },
-  { key: "enable_automation", label: "Go Live", number: 4 },
+  { key: "connect_facebook", label: "Connect Facebook", number: 1, description: "Link your Facebook account" },
+  { key: "select_page", label: "Select Page", number: 2, description: "Choose your business page" },
+  { key: "configure_business", label: "Configure", number: 3, description: "Set up your business info" },
+  { key: "preview_replies", label: "Preview Replies", number: 4, description: "Test how the AI responds" },
+  { key: "enable_automation", label: "Go Live", number: 5, description: "Enable automation" },
 ];
 
 const SAMPLE_COMMENTS = [
@@ -27,7 +29,7 @@ const SAMPLE_COMMENTS = [
   "Interested! Can you DM me more info?",
   "No hot water this morning, can you help?",
   "Can I get a quote for a new hot water system?",
-  "👍 great work!",
+  "\u{1F44D} great work!",
 ];
 
 export default function OnboardingFlow({
@@ -37,6 +39,7 @@ export default function OnboardingFlow({
   connectedPages,
   currentStep,
   mode,
+  sessionId,
 }: Props) {
   const router = useRouter();
 
@@ -44,23 +47,90 @@ export default function OnboardingFlow({
   const getInitialStep = () => {
     if (!hasToken) return 0;
     if (connectedPages.length === 0) return 1;
-    if (currentStep === "preview_replies") return 2;
-    if (currentStep === "enable_automation") return 3;
+    if (currentStep === "configure_business") return 2;
+    if (currentStep === "preview_replies") return 3;
+    if (currentStep === "enable_automation") return 4;
+    // Legacy 4-step flow compatibility
+    if (currentStep === "preview_replies" && !hasConfigStep()) return 3;
     return 0;
   };
 
+  const hasConfigStep = () => true; // Always use 5-step flow now
+
   const [step, setStep] = useState(getInitialStep());
   const [testComment, setTestComment] = useState("");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [testResult, setTestResult] = useState<any>(null);
   const [testing, setTesting] = useState(false);
   const [enabling, setEnabling] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [startedAt] = useState(Date.now());
+
+  // Quick config fields for step 3
+  const [bizName, setBizName] = useState(businessName || "");
+  const [serviceType, setServiceType] = useState("");
+  const [serviceAreas, setServiceAreas] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [aiTone, setAiTone] = useState("friendly");
+
+  // Track session progress
+  useEffect(() => {
+    trackSession("started", { step: STEPS[step]?.key });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const trackSession = async (eventType: string, metadata?: Record<string, unknown>) => {
+    try {
+      await fetch("/api/onboarding/step", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          step: STEPS[step]?.key || "unknown",
+          sessionEvent: eventType,
+          metadata: {
+            ...metadata,
+            sessionId,
+            elapsed_seconds: Math.round((Date.now() - startedAt) / 1000),
+          },
+        }),
+      });
+    } catch {
+      // non-critical
+    }
+  };
 
   // Step 1: Connect Facebook
   const handleConnectFacebook = () => {
+    trackSession("connect_facebook_clicked");
     window.location.href = `/api/connect/facebook?business_id=${businessId}`;
   };
 
-  // Step 3: Test a comment
+  // Step 3: Save quick config
+  const handleSaveConfig = async () => {
+    setSaving(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          business_name: bizName,
+          service_type: serviceType,
+          service_areas: serviceAreas.split(",").map((s) => s.trim()).filter(Boolean),
+          contact_phone: contactPhone,
+          contact_email: contactEmail,
+          ai_tone: aiTone,
+        }),
+      });
+      trackSession("config_saved");
+      advanceStep(3);
+    } catch {
+      // ignore
+    }
+    setSaving(false);
+  };
+
+  // Step 4: Test a comment
   const handleTestComment = useCallback(async (comment: string) => {
     setTesting(true);
     setTestResult(null);
@@ -78,7 +148,7 @@ export default function OnboardingFlow({
     setTesting(false);
   }, []);
 
-  // Step 4: Enable automation
+  // Step 5: Enable automation
   const handleEnableAutomation = async () => {
     setEnabling(true);
     try {
@@ -94,6 +164,7 @@ export default function OnboardingFlow({
         method: "POST",
       }).catch(() => {});
 
+      trackSession("completed", { mode: "active" });
       router.push("/dashboard");
     } catch {
       setEnabling(false);
@@ -104,6 +175,7 @@ export default function OnboardingFlow({
   const advanceStep = async (nextStep: number) => {
     setStep(nextStep);
     const stepKey = STEPS[nextStep]?.key || "enable_automation";
+    trackSession("step_advanced", { to_step: stepKey });
     await fetch("/api/onboarding/step", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -111,33 +183,53 @@ export default function OnboardingFlow({
     }).catch(() => {});
   };
 
+  const progressPercent = Math.round(((step + 1) / STEPS.length) * 100);
+
   return (
     <div>
+      {/* Progress bar */}
+      <div className="mb-2">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-medium text-gray-500">
+            Step {step + 1} of {STEPS.length}
+          </span>
+          <span className="text-xs text-gray-400">{progressPercent}% complete</span>
+        </div>
+        <div className="h-2 w-full rounded-full bg-gray-200">
+          <div
+            className="h-2 rounded-full bg-blue-600 transition-all duration-500"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+      </div>
+
       {/* Step indicators */}
       <div className="flex items-center justify-between mb-10">
         {STEPS.map((s, i) => (
           <div key={s.key} className="flex items-center">
-            <div
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${
-                i < step
-                  ? "bg-green-500 text-white"
-                  : i === step
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200 text-gray-500"
-              }`}
-            >
-              {i < step ? "✓" : s.number}
+            <div className="flex flex-col items-center">
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-colors ${
+                  i < step
+                    ? "bg-green-500 text-white"
+                    : i === step
+                    ? "bg-blue-600 text-white ring-4 ring-blue-100"
+                    : "bg-gray-200 text-gray-500"
+                }`}
+              >
+                {i < step ? "\u2713" : s.number}
+              </div>
+              <span
+                className={`mt-1 text-xs hidden sm:inline text-center ${
+                  i === step ? "font-semibold text-gray-900" : "text-gray-500"
+                }`}
+              >
+                {s.label}
+              </span>
             </div>
-            <span
-              className={`ml-2 text-sm hidden sm:inline ${
-                i === step ? "font-semibold text-gray-900" : "text-gray-500"
-              }`}
-            >
-              {s.label}
-            </span>
             {i < STEPS.length - 1 && (
               <div
-                className={`mx-3 h-0.5 w-8 sm:w-16 ${
+                className={`mx-2 h-0.5 w-6 sm:w-12 transition-colors ${
                   i < step ? "bg-green-500" : "bg-gray-200"
                 }`}
               />
@@ -156,19 +248,19 @@ export default function OnboardingFlow({
               This lets us monitor comments on your business page and reply automatically.
             </p>
             <p className="text-sm text-gray-400 mb-6">
-              We only read and reply to comments — we never post on your behalf.
+              We only read and reply to comments &mdash; we never post on your behalf.
             </p>
             {hasToken ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 text-green-600 bg-green-50 p-3 rounded">
-                  <span className="text-lg">✓</span>
+                  <span className="text-lg">{"\u2713"}</span>
                   <span className="font-medium">Facebook connected</span>
                 </div>
                 <button
                   onClick={() => advanceStep(1)}
                   className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
                 >
-                  Next: Select your page →
+                  Next: Select your page &rarr;
                 </button>
               </div>
             ) : (
@@ -200,7 +292,7 @@ export default function OnboardingFlow({
                     className="flex items-center justify-between p-3 border rounded-lg bg-green-50 border-green-200"
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-green-500">●</span>
+                      <span className="text-green-500">{"\u25CF"}</span>
                       <span className="font-medium">{page.page_name}</span>
                     </div>
                     <span className="text-sm text-green-600">Connected</span>
@@ -210,7 +302,7 @@ export default function OnboardingFlow({
                   onClick={() => advanceStep(2)}
                   className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
                 >
-                  Next: Preview how replies work →
+                  Next: Configure your business &rarr;
                 </button>
               </div>
             ) : (
@@ -222,19 +314,106 @@ export default function OnboardingFlow({
                   onClick={() => (window.location.href = "/connect")}
                   className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
                 >
-                  Select a page →
+                  Select a page &rarr;
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* STEP 3: Preview Replies */}
+        {/* STEP 3: Quick Config */}
         {step === 2 && (
+          <div>
+            <h2 className="text-xl font-bold mb-2">Quick business setup</h2>
+            <p className="text-gray-600 mb-6">
+              Tell us a bit about your business so the AI knows how to reply. You can tweak all of this later in Settings.
+            </p>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Business name</label>
+                  <input
+                    value={bizName}
+                    onChange={(e) => setBizName(e.target.value)}
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="HR AIR"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Service type</label>
+                  <input
+                    value={serviceType}
+                    onChange={(e) => setServiceType(e.target.value)}
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="Air Conditioning / HVAC"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Service areas (comma-separated)</label>
+                <input
+                  value={serviceAreas}
+                  onChange={(e) => setServiceAreas(e.target.value)}
+                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Newcastle, Maitland, Lake Macquarie, Hunter Valley"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Contact phone</label>
+                  <input
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="0400 000 000"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Contact email</label>
+                  <input
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="info@yourbusiness.com.au"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">AI reply tone</label>
+                <select
+                  value={aiTone}
+                  onChange={(e) => setAiTone(e.target.value)}
+                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="professional">Professional</option>
+                  <option value="friendly">Friendly</option>
+                  <option value="casual">Casual</option>
+                  <option value="conversational">Conversational</option>
+                </select>
+              </div>
+              <button
+                onClick={handleSaveConfig}
+                disabled={saving}
+                className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Save & continue \u2192"}
+              </button>
+              <button
+                onClick={() => advanceStep(3)}
+                className="w-full py-2 text-sm text-gray-500 hover:text-gray-700"
+              >
+                Skip for now &mdash; I&apos;ll configure later
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 4: Preview Replies */}
+        {step === 3 && (
           <div>
             <h2 className="text-xl font-bold mb-2">See how it works</h2>
             <p className="text-gray-600 mb-2">
-              Type a comment like a customer would — or try one of the examples below.
+              Type a comment like a customer would &mdash; or try one of the examples below.
               You&apos;ll see exactly what the system would reply.
             </p>
             <p className="text-xs text-gray-400 mb-4">
@@ -283,7 +462,6 @@ export default function OnboardingFlow({
             {/* Results */}
             {testResult && !testResult.error && (
               <div className="space-y-4 border-t pt-4">
-                {/* Classification */}
                 <div className="bg-gray-50 p-3 rounded">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-500 uppercase">
@@ -303,7 +481,7 @@ export default function OnboardingFlow({
                     <span className="font-medium capitalize">
                       {testResult.classification.type.replace(/_/g, " ")}
                     </span>
-                    {" · "}
+                    {" \u00B7 "}
                     <span className="text-gray-500">
                       {Math.round(testResult.classification.confidence * 100)}% confidence
                     </span>
@@ -324,7 +502,6 @@ export default function OnboardingFlow({
                   )}
                 </div>
 
-                {/* Public reply */}
                 <div className="bg-blue-50 p-3 rounded">
                   <span className="text-xs font-medium text-blue-600 uppercase block mb-1">
                     Public Reply (posted on your page)
@@ -332,7 +509,6 @@ export default function OnboardingFlow({
                   <p className="text-sm text-gray-800">{testResult.publicReply}</p>
                 </div>
 
-                {/* DM preview */}
                 <div className="bg-purple-50 p-3 rounded">
                   <span className="text-xs font-medium text-purple-600 uppercase block mb-1">
                     Private Message (sent via Messenger)
@@ -342,7 +518,6 @@ export default function OnboardingFlow({
                   </p>
                 </div>
 
-                {/* Action explanation */}
                 <div className={`flex items-center gap-2 text-sm p-2 rounded ${
                   testResult.confidenceTier === "high"
                     ? "bg-green-50 text-green-800"
@@ -377,16 +552,16 @@ export default function OnboardingFlow({
             )}
 
             <button
-              onClick={() => advanceStep(3)}
+              onClick={() => advanceStep(4)}
               className="w-full mt-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
             >
-              Looks good — let&apos;s go live →
+              Looks good &mdash; let&apos;s go live &rarr;
             </button>
           </div>
         )}
 
-        {/* STEP 4: Enable Automation */}
-        {step === 3 && (
+        {/* STEP 5: Enable Automation */}
+        {step === 4 && (
           <div>
             <h2 className="text-xl font-bold mb-2">Ready to go live</h2>
             <p className="text-gray-600 mb-6">
@@ -396,7 +571,7 @@ export default function OnboardingFlow({
 
             <div className="space-y-3 mb-6">
               <div className="flex items-start gap-3 p-3 bg-green-50 rounded">
-                <span className="text-green-500 mt-0.5">✓</span>
+                <span className="text-green-500 mt-0.5">{"\u2713"}</span>
                 <div>
                   <p className="font-medium text-sm">Auto-reply to leads</p>
                   <p className="text-xs text-gray-500">
@@ -405,16 +580,25 @@ export default function OnboardingFlow({
                 </div>
               </div>
               <div className="flex items-start gap-3 p-3 bg-green-50 rounded">
-                <span className="text-green-500 mt-0.5">✓</span>
+                <span className="text-green-500 mt-0.5">{"\u2713"}</span>
                 <div>
-                  <p className="font-medium text-sm">Lead tracking</p>
+                  <p className="font-medium text-sm">Lead tracking &amp; scoring</p>
                   <p className="text-xs text-gray-500">
-                    Every potential customer is logged and scored
+                    Every potential customer is logged, scored, and prioritised
                   </p>
                 </div>
               </div>
               <div className="flex items-start gap-3 p-3 bg-green-50 rounded">
-                <span className="text-green-500 mt-0.5">✓</span>
+                <span className="text-green-500 mt-0.5">{"\u2713"}</span>
+                <div>
+                  <p className="font-medium text-sm">Smart handoffs</p>
+                  <p className="text-xs text-gray-500">
+                    Tricky conversations get escalated to you automatically
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 p-3 bg-green-50 rounded">
+                <span className="text-green-500 mt-0.5">{"\u2713"}</span>
                 <div>
                   <p className="font-medium text-sm">Safe mode</p>
                   <p className="text-xs text-gray-500">
@@ -427,7 +611,8 @@ export default function OnboardingFlow({
             <div className="flex gap-3">
               <button
                 onClick={() => {
-                  // Start in monitor mode first
+                  trackSession("completed", { mode: "monitor" });
+                  fetch("/api/onboarding/complete", { method: "POST" }).catch(() => {});
                   router.push("/dashboard");
                 }}
                 className="flex-1 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50"
@@ -439,11 +624,11 @@ export default function OnboardingFlow({
                 disabled={enabling}
                 className="flex-1 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
               >
-                {enabling ? "Enabling..." : "Enable automation →"}
+                {enabling ? "Enabling..." : "Enable automation \u2192"}
               </button>
             </div>
             <p className="text-xs text-gray-400 text-center mt-3">
-              Monitor mode logs everything but doesn&apos;t reply. You can switch anytime.
+              Monitor mode logs everything but doesn&apos;t reply. You can switch anytime from the dashboard.
             </p>
           </div>
         )}

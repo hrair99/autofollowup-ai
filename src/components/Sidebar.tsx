@@ -13,6 +13,7 @@ import {
   Link2,
   CreditCard,
   Rocket,
+  AlertTriangle,
 } from "lucide-react";
 
 const navigation = [
@@ -21,6 +22,7 @@ const navigation = [
   { name: "Connect Page", href: "/connect", icon: Link2 },
   { name: "Test Bot", href: "/test", icon: Bot },
   { name: "Billing", href: "/billing", icon: CreditCard },
+  { name: "Operations", href: "/operations", icon: AlertTriangle },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 

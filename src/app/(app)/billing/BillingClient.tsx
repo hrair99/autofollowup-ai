@@ -87,25 +87,65 @@ export default function BillingClient({ plan, subscriptionStatus, hasStripeCusto
   const commentLimit = currentPlanObj?.limits.comments || 50;
   const dmLimit = currentPlanObj?.limits.dms || 30;
 
+  // Get current billing period (YYYY-MM)
+  const currentPeriod = new Date().toISOString().slice(0, 7);
+  const [year, month] = currentPeriod.split("-");
+  const monthName = new Date(parseInt(year), parseInt(month) - 1).toLocaleString("default", {
+    month: "long",
+    year: "numeric",
+  });
+
+  // Determine status badge styling
+  const getStatusBadge = () => {
+    const baseClasses = "text-xs px-3 py-1 rounded-full font-medium inline-flex items-center gap-1";
+    switch (subscriptionStatus) {
+      case "active":
+        return {
+          className: `${baseClasses} bg-green-100 text-green-800`,
+          label: "Active",
+          icon: "●",
+        };
+      case "trialing":
+        return {
+          className: `${baseClasses} bg-blue-100 text-blue-800`,
+          label: "Trialing",
+          icon: "◉",
+        };
+      case "past_due":
+        return {
+          className: `${baseClasses} bg-amber-100 text-amber-800`,
+          label: "Past Due",
+          icon: "⚠",
+        };
+      case "cancelled":
+        return {
+          className: `${baseClasses} bg-red-100 text-red-800`,
+          label: "Cancelled",
+          icon: "✕",
+        };
+      default:
+        return {
+          className: `${baseClasses} bg-gray-100 text-gray-700`,
+          label: plan === "free" ? "Free" : "Inactive",
+          icon: "○",
+        };
+    }
+  };
+
+  const statusBadge = getStatusBadge();
+
   return (
     <div className="space-y-8">
       {/* Current plan status */}
       <div className="bg-white rounded-lg border p-6">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-lg font-semibold">Current Plan</h2>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-2xl font-bold capitalize">{plan}</span>
-              <span
-                className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  isActive
-                    ? "bg-green-100 text-green-700"
-                    : subscriptionStatus === "past_due"
-                    ? "bg-yellow-100 text-yellow-700"
-                    : "bg-gray-100 text-gray-600"
-                }`}
-              >
-                {isActive ? "Active" : subscriptionStatus === "past_due" ? "Past Due" : plan === "free" ? "Free" : "Inactive"}
+            <h2 className="text-lg font-semibold mb-3">Current Plan</h2>
+            <div className="flex items-center gap-3">
+              <span className="text-3xl font-bold capitalize">{plan}</span>
+              <span className={statusBadge.className}>
+                <span>{statusBadge.icon}</span>
+                {statusBadge.label}
               </span>
             </div>
           </div>
@@ -113,17 +153,28 @@ export default function BillingClient({ plan, subscriptionStatus, hasStripeCusto
             <button
               onClick={handleManageBilling}
               disabled={loading === "portal"}
-              className="text-sm text-blue-600 hover:underline disabled:opacity-50"
+              className="text-sm text-blue-600 hover:underline disabled:opacity-50 font-medium"
             >
               {loading === "portal" ? "Opening..." : "Manage billing →"}
             </button>
           )}
         </div>
 
+        {/* Current period */}
+        <div className="mb-6 pb-6 border-b">
+          <p className="text-sm text-gray-600">Current Period</p>
+          <p className="text-lg font-medium text-gray-900">{monthName}</p>
+        </div>
+
         {/* Usage bars */}
-        <div className="space-y-3">
-          <UsageBar label="Comments" current={usage.comments} limit={plan === "free" ? 50 : commentLimit} />
-          <UsageBar label="DMs" current={usage.dms} limit={plan === "free" ? 30 : dmLimit} />
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-medium text-gray-700 mb-3">Usage</h3>
+            <div className="space-y-3">
+              <UsageBar label="Comments" current={usage.comments} limit={plan === "free" ? 50 : commentLimit} />
+              <UsageBar label="DMs" current={usage.dms} limit={plan === "free" ? 30 : dmLimit} />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -131,13 +182,13 @@ export default function BillingClient({ plan, subscriptionStatus, hasStripeCusto
       {(plan === "free" || plan === "starter") && (
         <div>
           <h2 className="text-lg font-semibold mb-4">
-            {plan === "free" ? "Choose a plan" : "Upgrade"}
+            {plan === "free" ? "Choose a plan" : "Upgrade your plan"}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {PLANS.filter((p) => p.key !== plan).map((p) => (
               <div
                 key={p.key}
-                className={`bg-white rounded-lg border p-6 ${
+                className={`bg-white rounded-lg border p-6 relative ${
                   p.popular ? "border-blue-500 ring-1 ring-blue-500" : ""
                 }`}
               >
@@ -146,10 +197,14 @@ export default function BillingClient({ plan, subscriptionStatus, hasStripeCusto
                     Most popular
                   </span>
                 )}
-                <h3 className="text-xl font-bold">{p.name}</h3>
-                <div className="mt-1 mb-4">
-                  <span className="text-3xl font-bold">{p.price}</span>
-                  <span className="text-gray-500">{p.period}</span>
+                <div className="flex items-baseline justify-between mb-4">
+                  <div>
+                    <h3 className="text-xl font-bold">{p.name}</h3>
+                    <div className="mt-1">
+                      <span className="text-3xl font-bold">{p.price}</span>
+                      <span className="text-gray-500">{p.period}</span>
+                    </div>
+                  </div>
                 </div>
                 <ul className="space-y-2 mb-6">
                   {p.features.map((f) => (
@@ -162,11 +217,11 @@ export default function BillingClient({ plan, subscriptionStatus, hasStripeCusto
                 <button
                   onClick={() => handleUpgrade(p.key)}
                   disabled={loading === p.key}
-                  className={`w-full py-2.5 rounded-lg font-medium ${
+                  className={`w-full py-2.5 rounded-lg font-medium transition-colors ${
                     p.popular
-                      ? "bg-blue-600 text-white hover:bg-blue-700"
-                      : "bg-gray-900 text-white hover:bg-gray-800"
-                  } disabled:opacity-50`}
+                      ? "bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                      : "bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
+                  }`}
                 >
                   {loading === p.key ? "Loading..." : `Upgrade to ${p.name}`}
                 </button>

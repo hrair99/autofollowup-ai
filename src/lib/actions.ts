@@ -294,6 +294,15 @@ export async function deleteFaqEntry(faqId: string) {
   revalidatePath("/settings");
 }
 
+export async function toggleFaqActive(faqId: string, active: boolean) {
+  const supabase = createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  await supabase.from("faq_entries").update({ is_active: active }).eq("id", faqId).eq("user_id", user.id);
+  revalidatePath("/settings");
+}
+
 export async function sendMessage(leadId: string, subject: string, body: string) {
   const supabase = createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
