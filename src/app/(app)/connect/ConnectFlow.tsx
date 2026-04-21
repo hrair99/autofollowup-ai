@@ -299,6 +299,9 @@ export default function ConnectFlow({
         )}
       </div>
 
+      {/* Connection Health */}
+      {hasToken && <ConnectionHealth />}
+
       {/* Info box */}
       <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
         <h3 className="text-sm font-medium text-blue-800 mb-1">
@@ -312,6 +315,144 @@ export default function ConnectFlow({
           activate them.
         </p>
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// Connection Health Panel
+// ============================================
+
+interface HealthData {
+  hasUserToken: boolean;
+  tokenDebugInfo: { isValid: boolean; expiresAt: string | null; scopes: string[] } | null;
+  pages: Array<{
+    pageId: string;
+    pageName: string;
+    tokenValid: boolean;
+    webhookSubscribed: boolean;
+    permissions: Array<{ permission: string; label: string; granted: boolean; required: boolean }>;
+    tokenExpiresAt: string | null;
+  }>;
+}
+
+function ConnectionHealth() {
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const checkHealth = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/connect/health");
+      if (res.ok) {
+        const data = await res.json();
+        setHealth(data);
+        setExpanded(true);
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatExpiry = (iso: string | null) => {
+    if (!iso) return "Never expires";
+    const d = new Date(iso);
+    const now = new Date();
+    const daysLeft = Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysLeft < 0) return "Expired";
+    if (daysLeft < 7) return `Expires in ${daysLeft} day${daysLeft !== 1 ? "s" : ""} ⚠️`;
+    return `Expires ${d.toLocaleDateString()}`;
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-6">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-lg font-semibold text-gray-900">Connection Health</h2>
+        <button
+          onClick={checkHealth}
+          disabled={loading}
+          className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50"
+        >
+          {loading ? "Checking..." : "Run Health Check"}
+        </button>
+      </div>
+      <p className="text-sm text-gray-500 mb-4">
+        Verify your token, permissions, and webhook subscriptions are working correctly.
+      </p>
+
+      {health && expanded && (
+        <div className="space-y-4">
+          {/* User Token Status */}
+          <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <div className={`h-2.5 w-2.5 rounded-full ${
+                health.tokenDebugInfo?.isValid ? "bg-green-500" : "bg-red-500"
+              }`} />
+              <span className="text-sm font-medium text-gray-900">
+                User Token: {health.tokenDebugInfo?.isValid ? "Valid" : "Invalid"}
+              </span>
+            </div>
+            {health.tokenDebugInfo && (
+              <div className="text-xs text-gray-500 space-y-1">
+                <p>{formatExpiry(health.tokenDebugInfo.expiresAt)}</p>
+                <p>Scopes: {health.tokenDebugInfo.scopes.length} granted</p>
+              </div>
+            )}
+          </div>
+
+          {/* Per-page health */}
+          {health.pages.map((page) => (
+            <div key={page.pageId} className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">{page.pageName}</h3>
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <div className={`h-2.5 w-2.5 rounded-full ${page.tokenValid ? "bg-green-500" : "bg-red-500"}`} />
+                  <span className="text-xs text-gray-600">
+                    Page Token: {page.tokenValid ? "Valid" : "Invalid"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className={`h-2.5 w-2.5 rounded-full ${page.webhookSubscribed ? "bg-green-500" : "bg-red-500"}`} />
+                  <span className="text-xs text-gray-600">
+                    Webhooks: {page.webhookSubscribed ? "Subscribed" : "Not subscribed"}
+                  </span>
+                </div>
+              </div>
+
+              {page.tokenExpiresAt && (
+                <p className="text-xs text-gray-500 mb-3">{formatExpiry(page.tokenExpiresAt)}</p>
+              )}
+
+              {/* Permissions checklist */}
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-gray-700 mb-1">Permissions</p>
+                {page.permissions.map((perm) => (
+                  <div key={perm.permission} className="flex items-center gap-2 text-xs">
+                    <span className={perm.granted ? "text-green-500" : perm.required ? "text-red-500" : "text-gray-400"}>
+                      {perm.granted ? "✓" : perm.required ? "✗" : "○"}
+                    </span>
+                    <span className={perm.granted ? "text-gray-600" : perm.required ? "text-red-600" : "text-gray-400"}>
+                      {perm.label}
+                      {perm.required && !perm.granted && " (required)"}
+                      {!perm.required && !perm.granted && " (optional)"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {health.pages.length === 0 && (
+            <p className="text-sm text-gray-500 text-center py-4">
+              No pages connected yet. Connect a page above to see its health status.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

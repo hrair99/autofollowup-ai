@@ -93,6 +93,9 @@ export interface Lead {
   ai_confidence: number | null;
   qualification_data: QualificationData;
   page_id: string | null;
+  // Scoring + handoff
+  lead_score: number | null;
+  handoff_active: boolean;
   // Comment automation fields
   first_comment_id: string | null;
   comment_count: number;
