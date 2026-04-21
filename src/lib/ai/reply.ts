@@ -90,7 +90,12 @@ Keep to 1-3 sentences. No long explanations unless asked.`;
 - NEVER make up specific prices, availability dates, or technical specs
 - When you do not know something specific, direct them to call/email or use the enquiry form
 - Do not ramble — answer directly then move the conversation forward
-- Use the customer's first name naturally`;
+- Use the customer's first name naturally
+
+BOOKING LINK RULE:
+- When the action is to send the booking/enquiry link, switch to HANDOFF MODE.
+- In handoff mode: do NOT ask for any details the form already collects (location, job type, timing, system details, contact info).
+- Keep the message to 1-2 sentences. Just direct them to the form and let them know we'll handle the rest.`;
 
   // ── Business knowledge ──
   systemPrompt += `\n\nBUSINESS INFORMATION:`;
@@ -150,12 +155,19 @@ function formatActionInstruction(action: NextAction, ctx: ReplyContext): string 
       return "Ask for the key missing detail about their job. One specific question only.";
     case "send_enquiry_link":
       return link
-        ? `Send the booking form link. Include this EXACT link: ${link} — Frame it directly: "Best way to get this booked in: ${link}"`
-        : "Direct them to call or email to get the job booked.";
+        ? `BOOKING LINK HANDOFF MODE — strict rules:
+- Include this EXACT link: ${link}
+- Keep the entire reply to 1-2 sentences MAX.
+- Do NOT ask any qualifying questions (the form collects all details).
+- Do NOT ask about location, job type, timing, urgency, or system type.
+- Do NOT repeat questions the booking form already handles.
+- Simply acknowledge their enquiry, then direct them to complete the form.
+- Example tone: "Thanks for your enquiry. You can book in and add all the details here, and we'll take care of the rest: ${link}"`
+        : "Direct them to call or email to get the job booked. Keep it to 1-2 sentences. Do NOT ask qualifying questions.";
     case "follow_up_soft":
-      return `Check in on their enquiry. Reference what they asked about. ${link ? `Include the booking link: ${link}` : ""} One clear next step.`;
+      return `Check in on their enquiry. Reference what they asked about. ${link ? `Include the booking link: ${link}. Do NOT ask qualifying questions — just direct them to the form.` : ""} Keep it to 1-2 sentences.`;
     case "follow_up_last_attempt":
-      return `Final follow-up. Let them know you are available when they are ready. ${link ? `Include the booking link: ${link}` : ""} Keep it brief.`;
+      return `Final follow-up. Let them know you are available when they are ready. ${link ? `Include the booking link: ${link}. Do NOT ask qualifying questions.` : ""} Keep it to 1-2 sentences.`;
     case "escalate_to_human":
       return "Let them know someone from the team will follow up personally. Be direct and reassuring.";
     case "close_out":
@@ -218,7 +230,7 @@ function buildFallbackReply(ctx: ReplyContext): string {
       return `Hey ${name}! Thanks for reaching out to ${biz}. How can we help you today?`;
     case "send_enquiry_link":
       return link
-        ? `Hey ${name}, best way to get this booked in is through this form: ${link}`
+        ? `Hi ${name} — thanks for your enquiry. You can book in and add all the details here, and we'll take care of the rest: ${link}`
         : `Hey ${name}, give us a call or send an email and we'll get this sorted for you.`;
     case "ask_location":
       return `No worries ${name}! What suburb are you in?`;
