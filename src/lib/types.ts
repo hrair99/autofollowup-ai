@@ -186,6 +186,19 @@ export interface Settings {
   comment_confidence_threshold: number;
   comment_escalation_threshold: number;
   comment_cooldown_minutes: number;
+  // Handoff config (from business_configs, loaded alongside settings)
+  handoff_auto_expire_hours?: number;
+  handoff_low_confidence_threshold?: number;
+  // Lead scoring weights (from business_configs)
+  scoring_classification?: number;
+  scoring_engagement?: number;
+  scoring_urgency?: number;
+  scoring_recency?: number;
+  scoring_intent?: number;
+  scoring_response_time?: number;
+  scoring_source?: number;
+  // ROI
+  estimated_lead_value?: number;
   // Timestamps
   created_at: string;
   updated_at: string;

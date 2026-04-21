@@ -3,6 +3,8 @@
 import { createServerSupabase } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { LeadStatus, AiTone, ConversionStage } from "./types";
+import { setBusinessConfigBatch, clearConfigCache } from "./business/config";
+import { getUserBusinessId } from "./business/resolve";
 
 // ============================================
 // Server Actions — v2
@@ -192,6 +194,60 @@ export async function saveSettings(formData: FormData) {
     await supabase.from("settings").update(settingsData).eq("user_id", user.id);
   } else {
     await supabase.from("settings").insert(settingsData);
+  }
+
+  // Persist handoff + scoring config to business_configs table
+  const businessId = await getUserBusinessId(user.id);
+  if (businessId) {
+    const configUpdates: Record<string, unknown> = {};
+
+    // Handoff config
+    const handoffExpireHours = parseInt(formData.get("handoff_auto_expire_hours") as string);
+    const handoffLowConf = parseFloat(formData.get("handoff_low_confidence_threshold") as string);
+    if (!isNaN(handoffExpireHours) || !isNaN(handoffLowConf)) {
+      configUpdates["handoff.config"] = {
+        auto_expire_hours: !isNaN(handoffExpireHours) ? handoffExpireHours : 24,
+        escalation_keywords: parseArray("escalation_keywords"),
+        low_confidence_threshold: !isNaN(handoffLowConf) ? handoffLowConf : 0.3,
+      };
+    }
+
+    // Scoring weights
+    const scoringClassification = parseFloat(formData.get("scoring_classification") as string);
+    const scoringEngagement = parseFloat(formData.get("scoring_engagement") as string);
+    const scoringUrgency = parseFloat(formData.get("scoring_urgency") as string);
+    const scoringRecency = parseFloat(formData.get("scoring_recency") as string);
+    const scoringIntent = parseFloat(formData.get("scoring_intent") as string);
+    const scoringResponseTime = parseFloat(formData.get("scoring_response_time") as string);
+    const scoringSource = parseFloat(formData.get("scoring_source") as string);
+
+    if (!isNaN(scoringClassification)) {
+      configUpdates["scoring.weights"] = {
+        classification: scoringClassification,
+        engagement: !isNaN(scoringEngagement) ? scoringEngagement : 1.0,
+        urgency: !isNaN(scoringUrgency) ? scoringUrgency : 1.0,
+        recency: !isNaN(scoringRecency) ? scoringRecency : 1.0,
+        intent: !isNaN(scoringIntent) ? scoringIntent : 1.0,
+        response_time: !isNaN(scoringResponseTime) ? scoringResponseTime : 0.8,
+        source: !isNaN(scoringSource) ? scoringSource : 0.5,
+      };
+    }
+
+    // Estimated lead value (business-level)
+    const estLeadValue = parseInt(formData.get("estimated_lead_value") as string);
+    if (!isNaN(estLeadValue) && estLeadValue > 0) {
+      configUpdates["business.estimated_lead_value"] = estLeadValue;
+      // Also update businesses table directly
+      await supabase
+        .from("businesses")
+        .update({ estimated_lead_value: estLeadValue })
+        .eq("id", businessId);
+    }
+
+    if (Object.keys(configUpdates).length > 0) {
+      await setBusinessConfigBatch(businessId, configUpdates);
+      clearConfigCache(businessId);
+    }
   }
 
   revalidatePath("/settings");

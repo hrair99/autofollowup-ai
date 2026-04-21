@@ -3,6 +3,8 @@ import SettingsForm from "./SettingsForm";
 import FaqManager from "./FaqManager";
 import type { Settings, FaqEntry } from "@/lib/types";
 import { ShieldCheck, ShieldAlert } from "lucide-react";
+import { getBusinessConfig } from "@/lib/business/config";
+import { getUserBusinessId } from "@/lib/business/resolve";
 
 export default async function SettingsPage() {
   const supabase = createServerSupabase();
@@ -12,6 +14,39 @@ export default async function SettingsPage() {
     supabase.from("settings").select("*").eq("user_id", user!.id).single(),
     supabase.from("faq_entries").select("*").eq("user_id", user!.id).order("sort_order"),
   ]);
+
+  // Load business config for handoff + scoring settings
+  let configExtras: Partial<Settings> = {};
+  const businessId = await getUserBusinessId(user!.id);
+  if (businessId) {
+    try {
+      const config = await getBusinessConfig(businessId);
+      configExtras = {
+        handoff_auto_expire_hours: config.handoff.auto_expire_hours,
+        handoff_low_confidence_threshold: config.handoff.low_confidence_threshold,
+        // Scoring weights from raw config
+        scoring_classification: (config.raw["scoring.weights"] as Record<string, number>)?.classification ?? 1.0,
+        scoring_engagement: (config.raw["scoring.weights"] as Record<string, number>)?.engagement ?? 1.0,
+        scoring_urgency: (config.raw["scoring.weights"] as Record<string, number>)?.urgency ?? 1.0,
+        scoring_recency: (config.raw["scoring.weights"] as Record<string, number>)?.recency ?? 1.0,
+        scoring_intent: (config.raw["scoring.weights"] as Record<string, number>)?.intent ?? 1.0,
+        scoring_response_time: (config.raw["scoring.weights"] as Record<string, number>)?.response_time ?? 0.8,
+        scoring_source: (config.raw["scoring.weights"] as Record<string, number>)?.source ?? 0.5,
+      };
+
+      // Load estimated_lead_value from businesses table
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("estimated_lead_value")
+        .eq("id", businessId)
+        .single();
+      if (biz?.estimated_lead_value) {
+        configExtras.estimated_lead_value = biz.estimated_lead_value;
+      }
+    } catch {
+      // Config not available yet, use defaults
+    }
+  }
 
   // Server-side env checks so we can render health badges without
   // exposing secret values to the client.
@@ -55,7 +90,7 @@ export default async function SettingsPage() {
         />
       </div>
 
-      <SettingsForm settings={settingsResult.data as Settings | null} />
+      <SettingsForm settings={settingsResult.data ? { ...(settingsResult.data as Settings), ...configExtras } : null} />
 
       <div className="mt-10 border-t pt-8">
         <FaqManager entries={(faqResult.data || []) as FaqEntry[]} />

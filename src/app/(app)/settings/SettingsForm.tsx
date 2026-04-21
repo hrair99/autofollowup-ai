@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveSettings } from "@/lib/actions";
-import { Save, Loader2, Settings2, Bot, Building, MessageSquare, Shield, Globe, Phone } from "lucide-react";
+import { Save, Loader2, Settings2, Bot, Building, MessageSquare, Shield, Globe, Phone, ArrowRightLeft, BarChart3 } from "lucide-react";
 import type { Settings } from "@/lib/types";
 
 export default function SettingsForm({ settings }: { settings: Settings | null }) {
@@ -249,6 +249,78 @@ export default function SettingsForm({ settings }: { settings: Settings | null }
             <label htmlFor="escalation_keywords" className="label">Escalation keywords (comma-separated)</label>
             <input id="escalation_keywords" name="escalation_keywords" defaultValue={settings?.escalation_keywords?.join(", ") || ""} className="input mt-1" placeholder="refund, lawyer, complaint, urgent, manager" />
             <p className="text-xs text-gray-500 mt-1">Messages containing these words will be flagged for human review.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Handoff Configuration */}
+      <div className="card">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <ArrowRightLeft className="h-5 w-5 text-gray-400" />
+          Handoff Configuration
+        </h2>
+        <p className="text-xs text-gray-500 mb-4">
+          When the AI detects it can&apos;t handle a conversation (low confidence, escalation keywords, negative sentiment), it creates a &quot;handoff&quot; pausing automation until a human claims and resolves it.
+        </p>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="handoff_auto_expire_hours" className="label">Auto-expire after (hours)</label>
+              <input id="handoff_auto_expire_hours" name="handoff_auto_expire_hours" type="number" min={1} max={168} defaultValue={settings?.handoff_auto_expire_hours ?? 24} className="input mt-1" />
+              <p className="text-xs text-gray-500 mt-1">If unclaimed, AI resumes after this many hours</p>
+            </div>
+            <div>
+              <label htmlFor="handoff_low_confidence_threshold" className="label">Low confidence threshold</label>
+              <input id="handoff_low_confidence_threshold" name="handoff_low_confidence_threshold" type="number" step="0.05" min={0} max={1} defaultValue={settings?.handoff_low_confidence_threshold ?? 0.3} className="input mt-1" />
+              <p className="text-xs text-gray-500 mt-1">AI confidence below this triggers handoff</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Lead Scoring Weights */}
+      <div className="card">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <BarChart3 className="h-5 w-5 text-gray-400" />
+          Lead Scoring Weights
+        </h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Adjust how much each signal contributes to the lead score. Higher weight = more influence on the final 0-100 score. Default is 1.0 for most categories.
+        </p>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div>
+              <label htmlFor="scoring_classification" className="label">Classification</label>
+              <input id="scoring_classification" name="scoring_classification" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_classification ?? 1.0} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="scoring_engagement" className="label">Engagement</label>
+              <input id="scoring_engagement" name="scoring_engagement" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_engagement ?? 1.0} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="scoring_urgency" className="label">Urgency</label>
+              <input id="scoring_urgency" name="scoring_urgency" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_urgency ?? 1.0} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="scoring_recency" className="label">Recency</label>
+              <input id="scoring_recency" name="scoring_recency" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_recency ?? 1.0} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="scoring_intent" className="label">Intent</label>
+              <input id="scoring_intent" name="scoring_intent" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_intent ?? 1.0} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="scoring_response_time" className="label">Response Time</label>
+              <input id="scoring_response_time" name="scoring_response_time" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_response_time ?? 0.8} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="scoring_source" className="label">Lead Source</label>
+              <input id="scoring_source" name="scoring_source" type="number" step="0.1" min={0} max={3} defaultValue={settings?.scoring_source ?? 0.5} className="input mt-1" />
+            </div>
+            <div>
+              <label htmlFor="estimated_lead_value" className="label">Lead Value ($)</label>
+              <input id="estimated_lead_value" name="estimated_lead_value" type="number" min={0} max={100000} defaultValue={settings?.estimated_lead_value ?? 300} className="input mt-1" />
+            </div>
           </div>
         </div>
       </div>

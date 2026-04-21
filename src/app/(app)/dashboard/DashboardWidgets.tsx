@@ -186,6 +186,155 @@ export function RoiDisplay() {
   );
 }
 
+// ─── Handoffs Panel ──────────────────────────────────────────────────
+interface Handoff {
+  id: string;
+  lead_id: string;
+  status: string;
+  trigger: string;
+  reason: string | null;
+  priority: string;
+  claimed_by: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  expires_at: string | null;
+  // joined lead data
+  lead_name?: string;
+  lead_source?: string;
+}
+
+export function HandoffsPanel() {
+  const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [acting, setActing] = useState<string | null>(null);
+
+  const fetchHandoffs = () => {
+    fetch("/api/handoffs")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.handoffs) setHandoffs(data.handoffs);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchHandoffs();
+  }, []);
+
+  const handleAction = async (handoffId: string, action: "claim" | "resolve", notes?: string) => {
+    setActing(handoffId);
+    try {
+      const res = await fetch("/api/handoffs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handoffId, action, notes }),
+      });
+      if (res.ok) {
+        fetchHandoffs();
+      }
+    } catch {
+      // ignore
+    }
+    setActing(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg border p-4 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/3 mb-3" />
+        <div className="h-6 bg-gray-200 rounded w-2/3" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-gray-900">Handoffs</span>
+          {handoffs.length > 0 && (
+            <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">
+              {handoffs.length} active
+            </span>
+          )}
+        </div>
+      </div>
+      {handoffs.length > 0 ? (
+        <div className="space-y-3 max-h-64 overflow-y-auto">
+          {handoffs.map((h) => (
+            <div
+              key={h.id}
+              className={`p-3 rounded-lg border text-sm ${
+                h.priority === "urgent"
+                  ? "border-red-200 bg-red-50"
+                  : h.status === "claimed"
+                  ? "border-blue-200 bg-blue-50"
+                  : "border-yellow-200 bg-yellow-50"
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      h.status === "claimed"
+                        ? "bg-blue-100 text-blue-800"
+                        : "bg-yellow-100 text-yellow-800"
+                    }`}
+                  >
+                    {h.status}
+                  </span>
+                  {h.priority === "urgent" && (
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-800">
+                      URGENT
+                    </span>
+                  )}
+                  <span className="text-xs text-gray-500">{h.trigger}</span>
+                </div>
+                <span className="text-xs text-gray-400">
+                  {new Date(h.created_at).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </div>
+              {h.reason && (
+                <p className="text-xs text-gray-600 mb-2 truncate">{h.reason}</p>
+              )}
+              <div className="flex items-center gap-2">
+                {h.status === "open" && (
+                  <button
+                    onClick={() => handleAction(h.id, "claim")}
+                    disabled={acting === h.id}
+                    className="text-xs font-medium text-blue-700 hover:text-blue-900 disabled:opacity-50"
+                  >
+                    Claim
+                  </button>
+                )}
+                {h.status === "claimed" && (
+                  <button
+                    onClick={() => handleAction(h.id, "resolve", "Resolved via dashboard")}
+                    disabled={acting === h.id}
+                    className="text-xs font-medium text-green-700 hover:text-green-900 disabled:opacity-50"
+                  >
+                    Resolve
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500 py-3 text-center">
+          No active handoffs. AI is handling all conversations.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Alerts Panel ────────────────────────────────────────────────────
 interface Alert {
   id: string;

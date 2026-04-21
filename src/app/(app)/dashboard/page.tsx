@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { LeadStatus } from "@/lib/types";
-import { AutomationToggle, RoiDisplay, AlertsPanel } from "./DashboardWidgets";
+import { AutomationToggle, RoiDisplay, AlertsPanel, HandoffsPanel } from "./DashboardWidgets";
 
 function getServiceClient() {
   return createClient(
@@ -256,6 +256,11 @@ export default async function DashboardPage() {
         />
         <RoiDisplay />
         <AlertsPanel />
+      </div>
+
+      {/* Handoffs Panel */}
+      <div className="mb-6">
+        <HandoffsPanel />
       </div>
 
       {/* Connected Pages Status */}
