@@ -1,6 +1,7 @@
 // ============================================
 // Lead Scoring — Calculates lead quality score
 // and ROI estimates based on configurable lead value.
+// Supports per-business weight overrides via BusinessConfig.
 // ============================================
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
@@ -15,7 +16,30 @@ export interface LeadScoreBreakdown {
   urgency_score: number;           // 0-20 based on urgency signals
   recency_score: number;           // 0-15 based on how recent the interaction
   intent_score: number;            // 0-10 based on specificity of intent
+  response_time_score: number;     // 0-10 based on how fast they replied
+  source_score: number;            // 0-10 based on lead source quality
 }
+
+/** Per-business weight overrides. Defaults sum to ~1.0 for each category. */
+export interface ScoringWeights {
+  classification: number;  // default 1.0
+  engagement: number;      // default 1.0
+  urgency: number;         // default 1.0
+  recency: number;         // default 1.0
+  intent: number;          // default 1.0
+  response_time: number;   // default 0.8
+  source: number;          // default 0.5
+}
+
+export const DEFAULT_WEIGHTS: ScoringWeights = {
+  classification: 1.0,
+  engagement: 1.0,
+  urgency: 1.0,
+  recency: 1.0,
+  intent: 1.0,
+  response_time: 0.8,
+  source: 0.5,
+};
 
 export interface LeadScore {
   total: number;                   // 0-100
@@ -58,23 +82,43 @@ const URGENCY_SCORES: Record<string, number> = {
   low: 3,
 };
 
+const SOURCE_SCORES: Record<string, number> = {
+  lead_ad: 10,
+  messenger: 8,
+  facebook_comment: 6,
+  manual: 4,
+  email: 5,
+  unknown: 2,
+};
+
 /**
  * Calculate a lead score (0-100) from lead data.
+ * Supports optional per-business weight overrides.
  */
-export function calculateLeadScore(lead: {
-  classification?: string;
-  urgency?: string;
-  comment_count?: number;
-  private_reply_count?: number;
-  created_at?: string;
-  entities?: Record<string, unknown>;
-}): LeadScore {
+export function calculateLeadScore(
+  lead: {
+    classification?: string;
+    urgency?: string;
+    comment_count?: number;
+    private_reply_count?: number;
+    message_count?: number;
+    created_at?: string;
+    entities?: Record<string, unknown>;
+    response_time_seconds?: number | null;
+    source?: string;
+  },
+  weights?: Partial<ScoringWeights>
+): LeadScore {
+  const w: ScoringWeights = { ...DEFAULT_WEIGHTS, ...weights };
+
   const breakdown: LeadScoreBreakdown = {
     classification_score: 0,
     engagement_score: 0,
     urgency_score: 0,
     recency_score: 0,
     intent_score: 0,
+    response_time_score: 0,
+    source_score: 0,
   };
 
   // Classification score (0-30)
@@ -83,12 +127,13 @@ export function calculateLeadScore(lead: {
   // Engagement score (0-25)
   const comments = lead.comment_count || 0;
   const dms = lead.private_reply_count || 0;
-  breakdown.engagement_score = Math.min(25, comments * 5 + dms * 8);
+  const msgs = lead.message_count || 0;
+  breakdown.engagement_score = Math.min(25, comments * 5 + dms * 8 + msgs * 3);
 
   // Urgency score (0-20)
   breakdown.urgency_score = URGENCY_SCORES[lead.urgency || "normal"] || 5;
 
-  // Recency score (0-15) — newer = higher score
+  // Recency score (0-15) — newer = higher score, with smooth decay
   if (lead.created_at) {
     const daysSince = (Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24);
     if (daysSince < 1) breakdown.recency_score = 15;
@@ -107,14 +152,40 @@ export function calculateLeadScore(lead: {
   if (entities.callback_intent) intentPoints += 1;
   breakdown.intent_score = Math.min(10, intentPoints);
 
-  const total = Math.min(
-    100,
-    breakdown.classification_score +
-    breakdown.engagement_score +
-    breakdown.urgency_score +
-    breakdown.recency_score +
-    breakdown.intent_score
-  );
+  // Response time score (0-10) — faster reply from customer = more interested
+  if (lead.response_time_seconds != null && lead.response_time_seconds > 0) {
+    const minutes = lead.response_time_seconds / 60;
+    if (minutes < 5) breakdown.response_time_score = 10;
+    else if (minutes < 30) breakdown.response_time_score = 8;
+    else if (minutes < 120) breakdown.response_time_score = 5;
+    else if (minutes < 1440) breakdown.response_time_score = 3;
+    else breakdown.response_time_score = 1;
+  }
+
+  // Source score (0-10) — lead ads are highest intent
+  breakdown.source_score = SOURCE_SCORES[lead.source || "unknown"] || 2;
+
+  // Weighted total — normalize to 0-100
+  const rawTotal =
+    breakdown.classification_score * w.classification +
+    breakdown.engagement_score * w.engagement +
+    breakdown.urgency_score * w.urgency +
+    breakdown.recency_score * w.recency +
+    breakdown.intent_score * w.intent +
+    breakdown.response_time_score * w.response_time +
+    breakdown.source_score * w.source;
+
+  // Max possible raw = 30*1 + 25*1 + 20*1 + 15*1 + 10*1 + 10*0.8 + 10*0.5 = 113
+  const maxRaw =
+    30 * w.classification +
+    25 * w.engagement +
+    20 * w.urgency +
+    15 * w.recency +
+    10 * w.intent +
+    10 * w.response_time +
+    10 * w.source;
+
+  const total = Math.round(Math.min(100, (rawTotal / maxRaw) * 100));
 
   let tier: "hot" | "warm" | "cold";
   if (total >= 65) tier = "hot";

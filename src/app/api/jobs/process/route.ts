@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { claimNextJob, completeJob, failJob } from "@/lib/jobs/queue";
 import { handleComment } from "@/lib/conversation/commentHandler";
 import { handleMessengerMessage } from "@/lib/conversation/engine";
+import { handleLeadgen } from "@/lib/conversation/leadgenHandler";
 import { resolveBusinessByPage } from "@/lib/business/resolve";
 import { checkSubscriptionGate, checkAndIncrementUsage } from "@/lib/billing/stripe";
 import type { NormalizedWebhookEvent } from "@/lib/types";
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
   }> = [];
 
   for (let i = 0; i < MAX_BATCH; i++) {
-    const job = await claimNextJob(["handle_comment", "handle_message"]);
+    const job = await claimNextJob(["handle_comment", "handle_message", "handle_leadgen"]);
     if (!job) break;
 
     try {
@@ -98,6 +99,8 @@ export async function POST(req: NextRequest) {
         await handleComment(payload.event, bizCtx ?? undefined);
       } else if (job.type === "handle_message") {
         await handleMessengerMessage(payload.event, bizCtx ?? undefined);
+      } else if (job.type === "handle_leadgen") {
+        await handleLeadgen(payload.event, bizCtx ?? undefined);
       } else {
         throw new Error(`unknown_job_type:${job.type}`);
       }

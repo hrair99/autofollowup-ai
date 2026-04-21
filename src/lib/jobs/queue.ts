@@ -12,7 +12,7 @@ import crypto from "crypto";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<any, any, any>;
 
-export type JobType = "handle_comment" | "handle_message";
+export type JobType = "handle_comment" | "handle_message" | "handle_leadgen" | "expire_handoffs";
 
 export interface JobRecord {
   id: string;
@@ -181,4 +181,20 @@ export async function failJob(
  */
 export function commentDedupeKey(pageId: string, commentId: string): string {
   return `comment:${pageId}:${commentId}`;
+}
+
+/**
+ * Build a deterministic dedupe key for message jobs.
+ * Uses platform_message_id when available, falls back to sender+timestamp.
+ */
+export function messageDedupeKey(
+  pageId: string,
+  senderId: string,
+  platformMessageId?: string,
+  timestamp?: number
+): string {
+  if (platformMessageId) {
+    return `message:${pageId}:${platformMessageId}`;
+  }
+  return `message:${pageId}:${senderId}:${timestamp || Date.now()}`;
 }

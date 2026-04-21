@@ -24,9 +24,12 @@ const VERIFY_TOKEN =
   process.env.META_VERIFY_TOKEN || "autofollowup_verify_token_2024";
 const APP_SECRET = process.env.META_APP_SECRET;
 
-// Set WEBHOOK_INLINE_COMMENTS=true to process comments synchronously
-// inside the webhook handler (handy while debugging). Default: enqueue.
+// WEBHOOK_INLINE_COMMENTS=true → process comments synchronously (debug mode).
 const INLINE_COMMENTS = process.env.WEBHOOK_INLINE_COMMENTS === "true";
+
+// WEBHOOK_QUEUE_MESSAGES=true → enqueue messages to job queue instead of
+// processing inline. Safer but adds latency (waits for next cron tick).
+const QUEUE_MESSAGES = process.env.WEBHOOK_QUEUE_MESSAGES === "true";
 
 // ============================================
 // GET — Meta webhook verification
@@ -47,7 +50,17 @@ export async function GET(req: NextRequest) {
 }
 
 // ============================================
-// POST — Incoming events from Meta (messages + comments)
+// POST — Fast-ack webhook handler
+//
+// Design: validate → normalise → enqueue/fire → return 200 ASAP.
+// Meta expects a response within ~15 seconds. Our AI reply generation
+// can take 3–8 seconds, so we want to decouple acknowledgement from
+// processing whenever possible.
+//
+// • Comments: always enqueued (async via automation_jobs).
+// • Messages: processed inline by default (for fast Messenger UX),
+//   but can be queued via WEBHOOK_QUEUE_MESSAGES=true.
+// • Leadgen: processed inline (fast, no AI needed).
 // ============================================
 export async function POST(req: NextRequest) {
   const requestId = makeRequestId();
@@ -91,11 +104,7 @@ export async function POST(req: NextRequest) {
         rawBody,
       });
       return NextResponse.json(
-        {
-          status: "unauthorized",
-          reason: sigResult.reason,
-          request_id: requestId,
-        },
+        { status: "unauthorized", reason: sigResult.reason, request_id: requestId },
         { status: 401 }
       );
     }
@@ -109,31 +118,16 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     const msg = String(error);
     structuredLog({
-      requestId,
-      objectType: null,
-      eventTypes: [],
-      rawPresent: !!rawBody,
-      signatureVerified,
-      signatureSkipped: skipSig,
-      normalizedCount: 0,
-      droppedCount: 0,
-      dropReasons: ["invalid_json"],
-      status: "rejected",
-      error: msg,
+      requestId, objectType: null, eventTypes: [],
+      rawPresent: !!rawBody, signatureVerified, signatureSkipped: skipSig,
+      normalizedCount: 0, droppedCount: 0,
+      dropReasons: ["invalid_json"], status: "rejected", error: msg,
     });
     await persistWebhookDelivery({
-      requestId,
-      objectType: null,
-      eventTypes: [],
-      rawPresent: !!rawBody,
-      signatureVerified,
-      signatureSkipped: skipSig,
-      normalizedCount: 0,
-      droppedCount: 0,
-      dropReasons: ["invalid_json"],
-      status: "rejected",
-      error: msg,
-      rawBody,
+      requestId, objectType: null, eventTypes: [],
+      rawPresent: !!rawBody, signatureVerified, signatureSkipped: skipSig,
+      normalizedCount: 0, droppedCount: 0,
+      dropReasons: ["invalid_json"], status: "rejected", error: msg, rawBody,
     });
     return NextResponse.json({ status: "bad_request" }, { status: 400 });
   }
@@ -141,142 +135,166 @@ export async function POST(req: NextRequest) {
   const bodyObj = body as { object?: string };
   const objectType = bodyObj?.object ?? null;
 
-  // --- 3. Normalise + route ---
+  // --- 3. Normalise events ---
+  let events;
   try {
-    const events = normalizeWebhookEvents(
+    events = normalizeWebhookEvents(
       body as Parameters<typeof normalizeWebhookEvents>[0]
     );
-    const eventTypes = events.map((e) => e.type);
-
+  } catch (normError) {
+    console.error("[Webhook] Normalisation error:", normError);
     await persistWebhookDelivery({
-      requestId,
-      objectType,
-      eventTypes,
-      rawPresent: !!rawBody,
-      signatureVerified,
-      signatureSkipped: skipSig,
-      normalizedCount: events.length,
-      droppedCount: 0,
-      dropReasons: [],
-      status: "received",
-      rawBody,
+      requestId, objectType, eventTypes: [],
+      rawPresent: !!rawBody, signatureVerified, signatureSkipped: skipSig,
+      normalizedCount: 0, droppedCount: 0,
+      dropReasons: ["normalisation_error"], status: "error",
+      error: String(normError), rawBody,
     });
+    // Still return 200 — don't make Meta retry a bad payload forever
+    return NextResponse.json({ status: "normalisation_error", request_id: requestId });
+  }
 
-    structuredLog({
-      requestId,
-      objectType,
-      eventTypes,
-      rawPresent: !!rawBody,
-      signatureVerified,
-      signatureSkipped: skipSig,
-      normalizedCount: events.length,
-      droppedCount: 0,
-      dropReasons: [],
-      status: "received",
-    });
+  const eventTypes = events.map((e) => e.type);
 
-    if (events.length === 0) {
-      await updateDeliveryStatus(requestId, { status: "processed" });
-      return NextResponse.json({
-        status: "no_events",
-        request_id: requestId,
-      });
+  // --- 4. Persist delivery record (fast, non-blocking) ---
+  const deliveryPromise = persistWebhookDelivery({
+    requestId, objectType, eventTypes,
+    rawPresent: !!rawBody, signatureVerified, signatureSkipped: skipSig,
+    normalizedCount: events.length, droppedCount: 0,
+    dropReasons: [], status: "received", rawBody,
+  }).catch((e) => console.error("[Webhook] delivery persist error:", e));
+
+  structuredLog({
+    requestId, objectType, eventTypes,
+    rawPresent: !!rawBody, signatureVerified, signatureSkipped: skipSig,
+    normalizedCount: events.length, droppedCount: 0,
+    dropReasons: [], status: "received",
+  });
+
+  if (events.length === 0) {
+    await deliveryPromise;
+    await updateDeliveryStatus(requestId, { status: "processed" }).catch(() => {});
+    return NextResponse.json({ status: "no_events", request_id: requestId });
+  }
+
+  // --- 5. Route events (fast-ack: enqueue what we can, inline what we must) ---
+  // We collect background promises and let them run after returning the response.
+  const backgroundWork: Promise<void>[] = [];
+  let processed = 0;
+  let enqueued = 0;
+  const dropReasons: string[] = [];
+
+  // Business context cache (avoid repeated DB lookups within same batch)
+  const bizCache = new Map<string, BusinessContext | null>();
+  const getBizCtx = async (pgId: string): Promise<BusinessContext | null> => {
+    if (!bizCache.has(pgId)) {
+      bizCache.set(pgId, await resolveBusinessByPage(pgId));
     }
+    return bizCache.get(pgId) ?? null;
+  };
 
-    let processed = 0;
-    let enqueued = 0;
-    const dropReasons: string[] = [];
-
-    // Resolve business context per page (cache across events in same batch)
-    const bizCache = new Map<string, BusinessContext | null>();
-    const getBizCtx = async (pgId: string): Promise<BusinessContext | null> => {
-      if (!bizCache.has(pgId)) {
-        bizCache.set(pgId, await resolveBusinessByPage(pgId));
+  for (const event of events) {
+    try {
+      const bizCtx = await getBizCtx(event.pageId);
+      if (!bizCtx) {
+        dropReasons.push(`no_business:${event.pageId}`);
+        console.warn(`[Webhook] No business for page ${event.pageId}, skipping ${event.type}`);
+        continue;
       }
-      return bizCache.get(pgId) ?? null;
-    };
 
-    for (const event of events) {
-      try {
-        // Resolve which business owns this page
-        const bizCtx = await getBizCtx(event.pageId);
-        if (!bizCtx) {
-          dropReasons.push(`no_business:${event.pageId}`);
-          console.warn(`[Webhook] No business found for page ${event.pageId}, skipping ${event.type}`);
-          continue;
-        }
+      // Skip if business in monitor mode (except leadgen = just storage)
+      if (bizCtx.mode === "monitor" && event.type !== "leadgen") {
+        dropReasons.push(`monitor_mode:${event.type}`);
+        continue;
+      }
 
-        // Skip processing if business is in monitor mode (except leadgen which is just storage)
-        if (bizCtx.mode === "monitor" && event.type !== "leadgen") {
-          console.log(`[Webhook] Business ${bizCtx.businessId} in monitor mode, skipping ${event.type}`);
-          dropReasons.push(`monitor_mode:${event.type}`);
-          continue;
-        }
-
-        if (event.type === "message") {
-          // Messenger remains inline — already reliable.
-          await handleMessengerMessage(event, bizCtx);
+      if (event.type === "message") {
+        if (QUEUE_MESSAGES) {
+          // Queue mode: safer, but adds cron-tick latency
+          const key = `message:${event.pageId}:${event.platformMessageId || event.senderId + ":" + event.timestamp}`;
+          const res = await enqueueJob({
+            type: "handle_message",
+            dedupeKey: key,
+            payload: { event, request_id: requestId, business_id: bizCtx.businessId },
+            businessId: bizCtx.businessId,
+          });
+          if (res.enqueued) enqueued++;
+          else dropReasons.push(`enqueue_${res.reason}:message`);
+        } else {
+          // Inline mode: fire-and-forget for fast Messenger UX.
+          // We don't await this — it runs in the background after we return 200.
+          backgroundWork.push(
+            handleMessengerMessage(event, bizCtx).catch((err) =>
+              console.error(`[Webhook] bg message error:`, err)
+            )
+          );
           processed++;
-        } else if (event.type === "leadgen") {
-          // Lead ad form submissions — process inline (fast, no AI needed)
-          await handleLeadgen(event, bizCtx);
+        }
+      } else if (event.type === "leadgen") {
+        // Leadgen is fast (no AI), run inline
+        backgroundWork.push(
+          handleLeadgen(event, bizCtx).catch((err) =>
+            console.error(`[Webhook] bg leadgen error:`, err)
+          )
+        );
+        processed++;
+      } else if (event.type === "comment") {
+        if (INLINE_COMMENTS) {
+          backgroundWork.push(
+            handleComment(event, bizCtx).catch((err) =>
+              console.error(`[Webhook] bg comment error:`, err)
+            )
+          );
           processed++;
-        } else if (event.type === "comment") {
-          if (INLINE_COMMENTS) {
-            await handleComment(event, bizCtx);
-            processed++;
+        } else {
+          const key = commentDedupeKey(event.pageId, event.commentId || "unknown");
+          const res = await enqueueJob({
+            type: "handle_comment",
+            dedupeKey: key,
+            payload: { event, request_id: requestId, business_id: bizCtx.businessId },
+            businessId: bizCtx.businessId,
+          });
+          if (res.enqueued) enqueued++;
+          else if (res.reason === "duplicate") {
+            dropReasons.push("enqueue_duplicate:" + (event.commentId || "?"));
           } else {
-            const key = commentDedupeKey(
-              event.pageId,
-              event.commentId || "unknown"
-            );
-            const res = await enqueueJob({
-              type: "handle_comment",
-              dedupeKey: key,
-              payload: { event, request_id: requestId, business_id: bizCtx.businessId },
-              businessId: bizCtx.businessId,
-            });
-            if (res.enqueued) enqueued++;
-            else if (res.reason === "duplicate") {
-              dropReasons.push(
-                "enqueue_duplicate:" + (event.commentId || "?")
-              );
-            } else {
-              dropReasons.push(
-                "enqueue_error:" + (res.error || "unknown")
-              );
-              console.error("[Webhook] enqueue failed:", res.error);
-            }
+            dropReasons.push("enqueue_error:" + (res.error || "unknown"));
+            console.error("[Webhook] enqueue failed:", res.error);
           }
         }
-      } catch (eventError) {
-        console.error(
-          `[Webhook] Error processing ${event.type} event:`,
-          eventError
-        );
-        dropReasons.push(`processing_error:${event.type}`);
       }
+    } catch (eventError) {
+      console.error(`[Webhook] Error routing ${event.type}:`, eventError);
+      dropReasons.push(`routing_error:${event.type}`);
     }
-
-    await updateDeliveryStatus(requestId, {
-      status: "processed",
-      droppedCount: dropReasons.length,
-      dropReasons,
-    });
-
-    return NextResponse.json({
-      status: "ok",
-      processed,
-      enqueued,
-      dropped: dropReasons.length,
-      request_id: requestId,
-    });
-  } catch (error) {
-    const msg = String(error);
-    console.error("[Webhook] Error processing:", msg);
-    return NextResponse.json(
-      { error: "internal_error", message: msg },
-      { status: 500 }
-    );
   }
+
+  // --- 6. Return 200 immediately (fast-ack) ---
+  // Background work continues after the response is sent.
+  // On Vercel, the function stays alive briefly after response.
+  // On self-hosted, this is fine since Node keeps the event loop.
+  const response = NextResponse.json({
+    status: "ok",
+    processed,
+    enqueued,
+    dropped: dropReasons.length,
+    request_id: requestId,
+  });
+
+  // Fire-and-forget: update delivery status + let background work finish.
+  // We intentionally do NOT await these before returning.
+  Promise.all([
+    deliveryPromise,
+    ...backgroundWork,
+  ])
+    .then(() =>
+      updateDeliveryStatus(requestId, {
+        status: "processed",
+        droppedCount: dropReasons.length,
+        dropReasons,
+      })
+    )
+    .catch((e) => console.error("[Webhook] bg cleanup error:", e));
+
+  return response;
 }

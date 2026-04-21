@@ -17,6 +17,7 @@ import {
   loadBusinessSettings,
   resolveBusinessByPage,
 } from "../business/resolve";
+import { checkHandoffOrEscalate } from "./handoff";
 import type {
   Lead,
   Settings,
@@ -101,6 +102,31 @@ export async function handleMessengerMessage(
     // 7. Check escalation keywords
     if (containsEscalationKeyword(text, settings.escalation_keywords || [])) {
       classification.sentiment = "angry";
+    }
+
+    // 7b. Check handoff — if active or newly escalated, skip AI reply
+    if (businessId) {
+      const handoffCheck = await checkHandoffOrEscalate({
+        leadId: lead.id,
+        businessId,
+        confidence: classification.confidence,
+        sentiment: classification.sentiment,
+        intent: classification.intent,
+        messageText: text,
+        escalationKeywords: settings.escalation_keywords || [],
+        sourceChannel: "messenger",
+        sourceId: platformMessageId,
+      });
+      if (handoffCheck.skipAiReply) {
+        console.log(
+          `[Engine] Handoff active for lead ${lead.id}: ${handoffCheck.reason} — skipping AI reply`
+        );
+        await logAutomation(supabase, lead.id, "handoff_skip", "messenger", "no_reply", {
+          reason: handoffCheck.reason,
+          handoff_id: handoffCheck.handoffId,
+        });
+        return;
+      }
     }
 
     // 8. Merge qualification data
