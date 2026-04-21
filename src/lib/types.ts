@@ -64,6 +64,7 @@ export type NextAction =
 export interface Lead {
   id: string;
   user_id: string;
+  business_id: string | null;
   name: string;
   email: string;
   phone: string | null;

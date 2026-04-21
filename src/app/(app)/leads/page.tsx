@@ -3,6 +3,7 @@ import Link from "next/link";
 import StatusBadge from "@/components/StatusBadge";
 import { Users, Building2, Mail, MapPin, Zap, AlertCircle, CheckCircle2, Clock, Phone } from "lucide-react";
 import AddLeadButton from "./AddLeadButton";
+import LeadFilters from "./LeadFilters";
 import type { Lead, UrgencyLevel } from "@/lib/types";
 import { getUserBusinessId } from "@/lib/business/resolve";
 
@@ -134,16 +135,6 @@ export default async function LeadsPage(props: {
   const newCount = leadsData.filter(l => l.status === 'new').length;
   const bookedCount = leadsData.filter(l => l.status === 'booked').length;
 
-  // Build filter URLs
-  const getFilterUrl = (newStatus?: string, newScore?: string): string => {
-    const params = new URLSearchParams();
-    const status = newStatus !== undefined ? newStatus : statusFilter;
-    const score = newScore !== undefined ? newScore : scoreTierFilter;
-    if (status !== 'all') params.set('status', status);
-    if (score !== 'all') params.set('score', score);
-    return `/leads${params.toString() ? '?' + params.toString() : ''}`;
-  };
-
   return (
     <div>
       {/* Header */}
@@ -180,49 +171,7 @@ export default async function LeadsPage(props: {
       {/* Filters and content */}
       {leadsData.length > 0 ? (
         <div>
-          {/* Filter bar - use form instead of client-side handlers */}
-          <div className="mb-6 space-y-4">
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="flex-1">
-                <label className="block text-xs font-semibold text-gray-700 mb-2">
-                  Status
-                </label>
-                <select
-                  defaultValue={statusFilter}
-                  onChange={(e) => {
-                    window.location.href = getFilterUrl(e.target.value, undefined);
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
-                >
-                  <option value="all">All statuses</option>
-                  <option value="new">New</option>
-                  <option value="contacted">Contacted</option>
-                  <option value="following_up">Following Up</option>
-                  <option value="responded">Responded</option>
-                  <option value="booked">Booked</option>
-                  <option value="dead">Dead</option>
-                </select>
-              </div>
-
-              <div className="flex-1">
-                <label className="block text-xs font-semibold text-gray-700 mb-2">
-                  Lead Score
-                </label>
-                <select
-                  defaultValue={scoreTierFilter}
-                  onChange={(e) => {
-                    window.location.href = getFilterUrl(undefined, e.target.value);
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
-                >
-                  <option value="all">All scores</option>
-                  <option value="hot">Hot (65+)</option>
-                  <option value="warm">Warm (35-64)</option>
-                  <option value="cold">Cold (&lt;35)</option>
-                </select>
-              </div>
-            </div>
-          </div>
+          <LeadFilters statusFilter={statusFilter} scoreTierFilter={scoreTierFilter} />
 
           {/* Leads list */}
           <div className="space-y-3">
