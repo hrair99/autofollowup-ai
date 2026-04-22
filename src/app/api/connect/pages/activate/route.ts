@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
     await serviceClient
       .from("settings")
       .update({ meta_page_id: pageId })
-      .eq("business_id", businessId);
+      .eq("user_id", user.id);
 
     // Clear business resolution cache for this page
     clearPageCache(pageId);

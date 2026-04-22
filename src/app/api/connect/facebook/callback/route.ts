@@ -91,10 +91,13 @@ export async function GET(req: NextRequest) {
 
   try {
     // 1. Exchange code for short-lived user token
+    const redirectUri = getRedirectUri();
+    console.log("[OAuth Callback] Exchanging code with redirect_uri:", redirectUri);
+
     const tokenUrl =
       `https://graph.facebook.com/v25.0/oauth/access_token` +
       `?client_id=${META_APP_ID}` +
-      `&redirect_uri=${encodeURIComponent(getRedirectUri())}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
       `&client_secret=${encodeURIComponent(META_APP_SECRET)}` +
       `&code=${encodeURIComponent(code)}`;
 

@@ -95,7 +95,7 @@ export async function GET() {
   // Get connected pages
   const { data: pages } = await supabase
     .from("business_pages")
-    .select("page_id, page_name, page_access_token, is_active, token_status")
+    .select("page_id, page_name, access_token, is_active, token_status")
     .eq("business_id", businessId);
 
   if (pages && pages.length > 0) {
@@ -113,11 +113,11 @@ export async function GET() {
       };
 
       // Check page token and webhook subscription
-      if (page.page_access_token) {
+      if (page.access_token) {
         try {
           // Check subscribed apps (webhook subscription)
           const subRes = await fetch(
-            `https://graph.facebook.com/v25.0/${page.page_id}/subscribed_apps?access_token=${page.page_access_token}`
+            `https://graph.facebook.com/v25.0/${page.page_id}/subscribed_apps?access_token=${page.access_token}`
           );
           const subData = await subRes.json();
 
@@ -127,7 +127,7 @@ export async function GET() {
 
           // Debug the page token
           const pageDebugRes = await fetch(
-            `https://graph.facebook.com/v25.0/debug_token?input_token=${page.page_access_token}&access_token=${token}`
+            `https://graph.facebook.com/v25.0/debug_token?input_token=${page.access_token}&access_token=${token}`
           );
           const pageDebug = await pageDebugRes.json();
           if (pageDebug.data) {

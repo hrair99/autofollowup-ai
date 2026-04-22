@@ -5,8 +5,15 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "AutoFollowUp AI",
-  description: "Automatically follow up with leads until they respond, book, or are marked dead.",
+  title: "AutoFollowUp AI — Never Lose a Lead Again",
+  description:
+    "AI-powered lead follow-up for service businesses. Automatically reply to Facebook comments and messages, qualify leads, and follow up until they book.",
+  openGraph: {
+    title: "AutoFollowUp AI — Never Lose a Lead Again",
+    description:
+      "AI-powered lead follow-up for service businesses. Automatically reply to Facebook comments and messages, qualify leads, and follow up until they book.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

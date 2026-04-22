@@ -6,13 +6,16 @@ import { getPageToken, graphApi } from "./client";
 
 /**
  * Send a text message via Messenger.
+ * @param explicitToken - Pass a page access token directly (multi-tenant DB path).
+ *                        If omitted, falls back to env-var lookup via getPageToken.
  */
 export async function sendMessage(
   recipientId: string,
   text: string,
-  pageId?: string
+  pageId?: string,
+  explicitToken?: string
 ): Promise<unknown> {
-  const token = getPageToken(pageId);
+  const token = getPageToken(pageId, explicitToken);
   return graphApi("/me/messages", {
     method: "POST",
     body: {

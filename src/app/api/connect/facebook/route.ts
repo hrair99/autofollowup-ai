@@ -56,9 +56,12 @@ export async function GET(req: NextRequest) {
   const statePayload = `${businessId}:${user.id}:${Date.now()}`;
   const state = Buffer.from(statePayload).toString("base64url");
 
+  const redirectUri = getRedirectUri();
+  console.log("[OAuth] Initiating Meta login with redirect_uri:", redirectUri);
+
   const loginUrl = new URL("https://www.facebook.com/v25.0/dialog/oauth");
   loginUrl.searchParams.set("client_id", META_APP_ID);
-  loginUrl.searchParams.set("redirect_uri", getRedirectUri());
+  loginUrl.searchParams.set("redirect_uri", redirectUri);
   loginUrl.searchParams.set("scope", SCOPES);
   loginUrl.searchParams.set("state", state);
   loginUrl.searchParams.set("response_type", "code");

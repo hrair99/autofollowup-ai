@@ -308,32 +308,113 @@ export async function sendMessage(leadId: string, subject: string, body: string)
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
 
+  // Load lead to determine channel + get platform IDs
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id, user_id, platform_user_id, page_id, source, business_id")
+    .eq("id", leadId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (!lead) throw new Error("Lead not found");
+
+  const isMessenger = !!lead.platform_user_id && (lead.source === "messenger" || lead.source === "comment" || lead.source === "facebook");
+  const channel = isMessenger ? "messenger" : "email";
+  const channelType = isMessenger ? "messenger" : "email";
+
+  let status: "sent" | "failed" | "draft" = "draft";
+  let sentAt: string | null = null;
+  let platformMessageId: string | null = null;
+
+  // Actually deliver the message
+  if (isMessenger && lead.platform_user_id) {
+    try {
+      // Resolve page token from business_pages table
+      const { sendMessage: messengerSend } = await import("@/lib/meta/messenger");
+
+      let pageToken: string | undefined;
+      if (lead.page_id) {
+        // Try to get token from business_pages table (multi-tenant)
+        const { data: pageRow } = await supabase
+          .from("business_pages")
+          .select("access_token")
+          .eq("page_id", lead.page_id)
+          .eq("is_active", true)
+          .maybeSingle();
+
+        if (pageRow?.access_token) {
+          pageToken = pageRow.access_token;
+        }
+      }
+
+      // Send via Messenger API — pass explicit token if we have one from DB
+      const result = await messengerSend(
+        lead.platform_user_id,
+        body,
+        lead.page_id || undefined,
+        pageToken || undefined
+      ) as { message_id?: string };
+      platformMessageId = result?.message_id || null;
+
+      status = "sent";
+      sentAt = new Date().toISOString();
+    } catch (err) {
+      console.error("[sendMessage] Messenger delivery failed:", err);
+      status = "failed";
+      // Still save the message so user sees what failed
+    }
+  } else {
+    // Email leads — save as draft/manual (no email sending integration yet)
+    status = "sent";
+    sentAt = new Date().toISOString();
+  }
+
+  // Save message record
   const { data: message, error } = await supabase
     .from("messages")
     .insert({
       lead_id: leadId,
       user_id: user.id,
       direction: "outbound",
-      channel: "email",
-      channel_type: "email",
-      subject,
+      channel,
+      channel_type: channelType,
+      subject: isMessenger ? null : subject,
       body,
-      status: "sent",
-      sent_at: new Date().toISOString(),
+      status,
+      sent_at: sentAt,
+      platform_message_id: platformMessageId,
+      ai_generated: false,
+      metadata: {},
     })
     .select()
     .single();
 
   if (error) throw new Error(error.message);
 
+  // Update lead status
   await supabase
     .from("leads")
     .update({
       status: "contacted",
-      last_contacted_at: new Date().toISOString(),
+      last_contacted_at: sentAt || new Date().toISOString(),
     })
     .eq("id", leadId)
     .eq("user_id", user.id);
+
+  // Log the action
+  await supabase.from("automation_logs").insert({
+    lead_id: leadId,
+    event_type: "manual_message_sent",
+    channel,
+    action_taken: status === "sent" ? "delivered" : "delivery_failed",
+    details: {
+      by_user: user.id,
+      platform_message_id: platformMessageId,
+      messenger: isMessenger,
+    },
+    success: status === "sent",
+    error_message: status === "failed" ? "Messenger API delivery failed" : null,
+  });
 
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/leads");

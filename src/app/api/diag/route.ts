@@ -119,6 +119,7 @@ export async function GET(request: Request) {
   // Allow unauth access but hide sensitive detail fields
   const isAuthed = providedSecret === expectedSecret && expectedSecret.length > 0;
 
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
   const envPresence = {
     NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -130,6 +131,7 @@ export async function GET(request: Request) {
     META_APP_SECRET: !!process.env.META_APP_SECRET,
     META_SKIP_SIGNATURE_CHECK: process.env.META_SKIP_SIGNATURE_CHECK === "true",
     GROQ_API_KEY: !!process.env.GROQ_API_KEY,
+    NEXT_PUBLIC_APP_URL: !!process.env.NEXT_PUBLIC_APP_URL,
   };
 
   // Run all checks in parallel for speed
@@ -165,6 +167,12 @@ export async function GET(request: Request) {
     webhook: {
       url: `https://${process.env.VERCEL_URL || "autofollowup-ai.vercel.app"}/api/webhook`,
       verify_token_configured: !!process.env.META_VERIFY_TOKEN,
+    },
+    oauth: {
+      app_url: appUrl,
+      redirect_uri: `${appUrl}/api/connect/facebook/callback`,
+      meta_app_id: process.env.META_APP_ID || "2764382733907632",
+      note: "Add redirect_uri to Meta → Facebook Login → Settings → Valid OAuth Redirect URIs",
     },
   };
 
